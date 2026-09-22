@@ -6,6 +6,18 @@ from zoneinfo import ZoneInfo
 
 
 @dataclass(frozen=True, slots=True)
+class WorkSegment:
+    """One contiguous working-time segment."""
+
+    start: datetime
+    end: datetime
+
+    def __post_init__(self) -> None:
+        if self.start >= self.end:
+            raise ValueError("work segment start must be earlier than end")
+
+
+@dataclass(frozen=True, slots=True)
 class WorkCalendar:
     """Recurring weekly work calendar.
 
@@ -93,6 +105,29 @@ class WorkCalendar:
             current = self.next_work_start(closing)
 
         return current
+
+    def working_segments(self, start: datetime, minutes: float) -> tuple[WorkSegment, ...]:
+        """Split work across calendar boundaries without counting closed time."""
+
+        if minutes <= 0:
+            raise ValueError("minutes must be greater than 0")
+
+        current = self.next_work_start(start)
+        remaining = float(minutes)
+        segments: list[WorkSegment] = []
+
+        while remaining > 0:
+            closing = self._day_end(current)
+            available = (closing - current).total_seconds() / 60
+            segment_minutes = min(remaining, available)
+            segment_end = current + timedelta(minutes=segment_minutes)
+            segments.append(WorkSegment(start=current, end=segment_end))
+            remaining -= segment_minutes
+
+            if remaining > 0:
+                current = self.next_work_start(closing)
+
+        return tuple(segments)
 
     def working_minutes_between(self, start: datetime, end: datetime) -> float:
         """Count recurring working minutes in [start, end)."""
