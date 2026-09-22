@@ -6,9 +6,9 @@ a production priority rule. The caller supplies a dispatch sequence generated
 by the planning layer (for example FCFS, EDD, Slack, or CR).
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable
 
 from production_control.core.calendar_engine import WorkCalendar, WorkSegment
 from production_control.core.resource_engine import Resource, ResourceAllocation
