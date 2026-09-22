@@ -1,7 +1,7 @@
 """Routing precedence and WIP-buffer release rules."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from production_control.domain.enums import OperationState
 
