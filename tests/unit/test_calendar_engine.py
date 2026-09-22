@@ -48,3 +48,15 @@ def test_rejects_naive_datetime() -> None:
 
     with pytest.raises(ValueError):
         calendar.add_working_minutes(datetime(2026, 10, 5, 9), 30)
+
+
+def test_working_segments_split_at_calendar_boundary() -> None:
+    calendar = WorkCalendar()
+
+    segments = calendar.working_segments(dt(2026, 10, 5, 16, 50), 25)
+
+    assert len(segments) == 2
+    assert segments[0].start == dt(2026, 10, 5, 16, 50)
+    assert segments[0].end == dt(2026, 10, 5, 17)
+    assert segments[1].start == dt(2026, 10, 6, 9)
+    assert segments[1].end == dt(2026, 10, 6, 9, 15)
