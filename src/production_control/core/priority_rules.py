@@ -10,11 +10,11 @@ V1 deadline policy:
 The caller resolves that deadline before creating LotPriorityInput.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from math import isfinite
-from typing import Iterable
 
 
 class PriorityRule(StrEnum):
