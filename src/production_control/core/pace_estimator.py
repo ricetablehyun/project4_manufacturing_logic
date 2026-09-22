@@ -8,10 +8,10 @@ V1 policy:
   the execution-history source.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from statistics import fmean
-from typing import Sequence
 
 
 class PaceBasis(StrEnum):
