@@ -1,10 +1,10 @@
 """Gate Forecast slack and risk classification."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import IntEnum
 from math import isfinite
-from typing import Iterable
 
 
 class RiskLevel(IntEnum):
