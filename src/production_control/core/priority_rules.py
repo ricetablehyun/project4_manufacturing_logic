@@ -77,13 +77,17 @@ def rank_lots(
     lot_list = list(lots)
 
     if rule is PriorityRule.FCFS:
-        key = lambda lot: lot.release_at
+        def key(lot: LotPriorityInput) -> datetime:
+            return lot.release_at
     elif rule is PriorityRule.EDD:
-        key = lambda lot: lot.deadline
+        def key(lot: LotPriorityInput) -> datetime:
+            return lot.deadline
     elif rule is PriorityRule.SLACK:
-        key = lambda lot: lot.slack_minutes
+        def key(lot: LotPriorityInput) -> float:
+            return lot.slack_minutes
     elif rule is PriorityRule.CR:
-        key = lambda lot: lot.critical_ratio
+        def key(lot: LotPriorityInput) -> float:
+            return lot.critical_ratio
     else:
         raise ValueError(f"unsupported priority rule: {rule}")
 
