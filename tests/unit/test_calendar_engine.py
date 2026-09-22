@@ -5,7 +5,6 @@ import pytest
 
 from production_control.core.calendar_engine import WorkCalendar
 
-
 SEOUL = ZoneInfo("Asia/Seoul")
 
 
