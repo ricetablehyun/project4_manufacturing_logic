@@ -165,10 +165,11 @@ def test_same_timestamp_does_not_recalculate_after_first_parallel_start() -> Non
     ) -> tuple[LotPriorityInput, ...]:
         nonlocal call_count
         call_count += 1
-        if call_count == 1:
-            order = ("LOT-A", "LOT-B", "LOT-C")
-        else:
-            order = ("LOT-C", "LOT-B", "LOT-A")
+        order = (
+            ("LOT-A", "LOT-B", "LOT-C")
+            if call_count == 1
+            else ("LOT-C", "LOT-B", "LOT-A")
+        )
 
         return tuple(
             LotPriorityInput(
@@ -312,7 +313,7 @@ def test_after_hours_start_advances_to_next_calendar_open() -> None:
         static_lot_priorities=(static_priority("LOT-A"),),
         resources=resources(),
         calendar=WorkCalendar(),
-        start_time=dt(9, 18),
+        start_time=dt(18),
     )
 
     assert result.operations[0].start == datetime(
