@@ -149,6 +149,7 @@ class WorkAttemptRow(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     result: Mapped[str | None] = mapped_column(String)
     active_minutes: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    rework_role: Mapped[str | None] = mapped_column(String)
 
 
 class WorkEventRow(Base):
