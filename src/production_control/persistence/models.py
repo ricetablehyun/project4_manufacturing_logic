@@ -151,6 +151,7 @@ class WorkAttemptRow(Base):
     active_minutes: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     rework_role: Mapped[str | None] = mapped_column(String)
     rework_event_ref: Mapped[str | None] = mapped_column(String)
+    rework_source_ref: Mapped[str | None] = mapped_column(String)
 
 
 class WorkEventRow(Base):
