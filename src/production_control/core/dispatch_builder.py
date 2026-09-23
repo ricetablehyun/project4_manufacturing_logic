@@ -4,11 +4,7 @@ import collections.abc
 from dataclasses import dataclass
 from datetime import datetime
 
-from production_control.core.priority_rules import (
-    LotPriorityInput,
-    PriorityRule,
-    rank_lots,
-)
+from production_control.core import priority_rules
 from production_control.domain.enums import OperationState
 
 
@@ -61,13 +57,13 @@ def _rank_same_lot_operations(
 
 def build_dispatch_sequence(
     *,
-    lots: collections.abc.Iterable[LotPriorityInput],
+    lots: collections.abc.Iterable[priority_rules.LotPriorityInput],
     operations: collections.abc.Iterable[OperationDispatchInput],
-    rule: PriorityRule,
+    rule: priority_rules.PriorityRule,
 ) -> tuple[str, ...]:
     """Rank LOTs, then apply the confirmed deterministic same-LOT tie-break."""
 
-    ranked_lots = rank_lots(lots, rule=rule)
+    ranked_lots = priority_rules.rank_lots(lots, rule=rule)
     operation_list = list(operations)
     ranked_lot_ids = {lot.lot_id for lot in ranked_lots}
 
