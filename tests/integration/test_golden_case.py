@@ -240,7 +240,7 @@ def test_golden_case_hold_actuals_feed_pace_then_final_test_fail_adds_rework() -
                 lot_id="LOT-101",
                 release_at=dt(9),
                 deadline=dt(15, 30),
-                remaining_work_minutes=pytest.approx(0) and 1,
+                remaining_work_minutes=25 + 30 + 110 / 3 + 30,
                 time_until_deadline_minutes=120,
             ),
         ),
