@@ -152,6 +152,7 @@ class WorkAttemptRow(Base):
     rework_role: Mapped[str | None] = mapped_column(String)
     rework_event_ref: Mapped[str | None] = mapped_column(String)
     rework_source_ref: Mapped[str | None] = mapped_column(String)
+    rework_detail: Mapped[str | None] = mapped_column(String)
 
 
 class WorkEventRow(Base):
