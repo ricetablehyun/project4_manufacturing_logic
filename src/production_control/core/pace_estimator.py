@@ -6,6 +6,8 @@ V1 policy:
   completed normal attempts for that LOT × process.
 - Remaining work is evaluated at LOT × process level, while Unit records remain
   the execution-history source.
+- The signed work-budget balance is preserved so time overruns are not hidden by
+  clamping scheduler-facing remaining work to zero.
 """
 
 from collections.abc import Sequence
@@ -30,6 +32,8 @@ class PaceForecast:
     completed_sample_count: int
     estimated_total_work_minutes: float
     cumulative_actual_active_minutes: float
+    work_budget_balance_minutes: float
+    overrun_minutes: float
     remaining_normal_work_minutes: float
     confirmed_rework_work_minutes: float
     remaining_work_minutes: float
@@ -91,7 +95,9 @@ def estimate_lot_process_work(
         raise ValueError("cumulative_actual_active_minutes must be 0 or greater")
 
     estimated_total = pace * planned_unit_count
-    remaining_normal = max(estimated_total - actual_active, 0.0)
+    work_budget_balance = estimated_total - actual_active
+    overrun = max(-work_budget_balance, 0.0)
+    remaining_normal = max(work_budget_balance, 0.0)
     remaining_total = remaining_normal + confirmed_rework_work_minutes
 
     return PaceForecast(
@@ -100,6 +106,8 @@ def estimate_lot_process_work(
         completed_sample_count=len(completed_active_minutes),
         estimated_total_work_minutes=estimated_total,
         cumulative_actual_active_minutes=actual_active,
+        work_budget_balance_minutes=work_budget_balance,
+        overrun_minutes=overrun,
         remaining_normal_work_minutes=remaining_normal,
         confirmed_rework_work_minutes=float(confirmed_rework_work_minutes),
         remaining_work_minutes=remaining_total,

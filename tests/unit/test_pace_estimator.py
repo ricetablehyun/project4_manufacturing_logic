@@ -75,3 +75,31 @@ def test_rejects_invalid_policy_inputs() -> None:
             completed_active_minutes=[20, -1],
             pace_min_samples=3,
         )
+
+
+def test_preserves_signed_budget_overrun_instead_of_hiding_it() -> None:
+    forecast = estimate_lot_process_work(
+        planned_unit_count=10,
+        standard_minutes_per_unit=25,
+        completed_active_minutes=[20, 40],
+        pace_min_samples=3,
+        cumulative_actual_active_minutes=260,
+    )
+
+    assert forecast.estimated_total_work_minutes == 250
+    assert forecast.work_budget_balance_minutes == -10
+    assert forecast.overrun_minutes == 10
+    assert forecast.remaining_normal_work_minutes == 0
+
+
+def test_positive_budget_balance_has_no_overrun() -> None:
+    forecast = estimate_lot_process_work(
+        planned_unit_count=10,
+        standard_minutes_per_unit=25,
+        completed_active_minutes=[20],
+        pace_min_samples=3,
+    )
+
+    assert forecast.work_budget_balance_minutes == 230
+    assert forecast.overrun_minutes == 0
+    assert forecast.remaining_normal_work_minutes == 230
