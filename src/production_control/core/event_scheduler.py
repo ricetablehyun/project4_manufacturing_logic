@@ -433,6 +433,7 @@ def schedule_operations_event_driven(
                     start=slot.start,
                     end=slot.end,
                     segments=slot.segments,
+                    execution_seq=item.operation.execution_seq,
                 )
                 scheduled_by_id[operation_id] = scheduled
                 scheduled_operations.append(scheduled)
