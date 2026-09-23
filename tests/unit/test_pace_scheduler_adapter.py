@@ -6,8 +6,10 @@ import pytest
 from production_control.core.pace_estimator import estimate_lot_process_work
 from production_control.core.pace_scheduler_adapter import (
     ForecastReadiness,
+    HoldDurationBasis,
     UnitPaceSchedulingInput,
     build_pace_schedule_inputs,
+    resume_held_unit,
 )
 from production_control.core.slot_engine import ResourceRequirement
 from production_control.domain.enums import OperationState
@@ -43,6 +45,10 @@ def unit(
     lot_id: str = "LOT-A",
     process_code: str = "TUNING",
     step_seq: int = 1,
+    hold_remaining_minutes: float | None = None,
+    standard_minutes_per_unit: float | None = None,
+    eligible_at: datetime | None = None,
+    release_at: datetime | None = None,
 ) -> UnitPaceSchedulingInput:
     return UnitPaceSchedulingInput(
         operation_id=operation_id,
@@ -51,11 +57,13 @@ def unit(
         step_seq=step_seq,
         process_code=process_code,
         state=state,
-        eligible_at=dt(9),
-        release_at=dt(9),
+        eligible_at=eligible_at or dt(9),
+        release_at=release_at or dt(9),
         requirements=(ResourceRequirement("TUNING_STATION"),),
         active_minutes=active_minutes,
         expected_remaining_minutes=expected_remaining_minutes,
+        hold_remaining_minutes=hold_remaining_minutes,
+        standard_minutes_per_unit=standard_minutes_per_unit,
     )
 
 
@@ -185,3 +193,140 @@ def test_adapter_requires_one_lot_process_group() -> None:
                 unit("OP-2", "U02", lot_id="LOT-B"),
             ),
         )
+
+
+def test_hold_uses_manager_remaining_override() -> None:
+    result = build_pace_schedule_inputs(
+        forecast=forecast(),
+        units=(
+            unit(
+                "OP-1",
+                "U01",
+                state=OperationState.HOLD,
+                hold_remaining_minutes=12,
+                standard_minutes_per_unit=25,
+            ),
+        ),
+    )
+
+    assert result.readiness is ForecastReadiness.READY
+    assert result.items[0].operation.duration_minutes == 12
+    assert result.signals[0].hold_forecast_minutes == 12
+    assert (
+        result.signals[0].hold_duration_basis
+        is HoldDurationBasis.MANAGER_OVERRIDE
+    )
+
+
+def test_hold_without_override_uses_standard_fallback() -> None:
+    result = build_pace_schedule_inputs(
+        forecast=forecast(),
+        units=(
+            unit(
+                "OP-1",
+                "U01",
+                state=OperationState.HOLD,
+                standard_minutes_per_unit=25,
+            ),
+        ),
+    )
+
+    assert result.readiness is ForecastReadiness.READY
+    assert result.items[0].operation.duration_minutes == 25
+    assert result.signals[0].hold_forecast_minutes == 25
+    assert (
+        result.signals[0].hold_duration_basis
+        is HoldDurationBasis.STANDARD_FALLBACK
+    )
+
+
+def test_hold_without_override_or_standard_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        build_pace_schedule_inputs(
+            forecast=forecast(),
+            units=(
+                unit(
+                    "OP-1",
+                    "U01",
+                    state=OperationState.HOLD,
+                ),
+            ),
+        )
+
+
+def test_invalid_hold_standard_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        unit(
+            "OP-1",
+            "U01",
+            state=OperationState.HOLD,
+            standard_minutes_per_unit=0,
+        )
+
+
+def test_resume_changes_hold_to_running_and_releases_at_resume_time() -> None:
+    held = unit(
+        "OP-1",
+        "U01",
+        state=OperationState.HOLD,
+        hold_remaining_minutes=12,
+    )
+
+    resumed = resume_held_unit(
+        unit=held,
+        resumed_at=dt(10),
+    )
+
+    assert resumed.state is OperationState.RUNNING
+    assert resumed.eligible_at == dt(10)
+    assert resumed.release_at == dt(10)
+
+
+def test_resume_preserves_later_existing_release_constraints() -> None:
+    held = unit(
+        "OP-1",
+        "U01",
+        state=OperationState.HOLD,
+        hold_remaining_minutes=12,
+        eligible_at=dt(11),
+        release_at=dt(12),
+    )
+
+    resumed = resume_held_unit(
+        unit=held,
+        resumed_at=dt(10),
+    )
+
+    assert resumed.eligible_at == dt(11)
+    assert resumed.release_at == dt(12)
+
+
+def test_only_hold_state_can_be_resumed() -> None:
+    with pytest.raises(ValueError):
+        resume_held_unit(
+            unit=unit("OP-1", "U01", state=OperationState.WAITING),
+            resumed_at=dt(10),
+        )
+
+
+def test_resumed_running_over_pace_still_requires_worker_residual() -> None:
+    held = unit(
+        "OP-1",
+        "U01",
+        state=OperationState.HOLD,
+        active_minutes=31,
+        hold_remaining_minutes=12,
+    )
+    resumed = resume_held_unit(
+        unit=held,
+        resumed_at=dt(10),
+    )
+
+    result = build_pace_schedule_inputs(
+        forecast=forecast(cumulative_actual=31),
+        units=(resumed,),
+    )
+
+    assert result.readiness is ForecastReadiness.WAIT
+    assert result.waiting_operation_ids == ("OP-1",)
+    assert result.signals[0].pace_overrun_minutes == 6
