@@ -36,7 +36,14 @@ def seeded_session():
     session = create_session_factory(engine)()
 
     session.add(ProductRow(product_id="P1", product_code="RF-MOCK-A", name="RF Mock A"))
-    session.add(ProcessRow(process_id="PR-T", process_code="TUNING", name="Tuning", process_kind="INTERNAL"))
+    session.add(
+        ProcessRow(
+            process_id="PR-T",
+            process_code="TUNING",
+            name="Tuning",
+            process_kind="INTERNAL",
+        )
+    )
     session.add(RoutingRow(routing_id="R1", product_id="P1", version=1, active=True))
     session.add(
         RoutingStepRow(
