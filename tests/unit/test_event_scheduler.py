@@ -31,6 +31,7 @@ def item(
     eligible_at: datetime | None = None,
     resource_code: str = "WORKER_POOL",
     buffer_k: int | None = None,
+    state: OperationState = OperationState.WAITING,
 ) -> EventDispatchInput:
     release = release_at or dt(9)
     eligible = eligible_at or release
@@ -50,7 +51,7 @@ def item(
             operation_id=operation_id,
             lot_id=lot_id,
             unit_id=unit_id,
-            state=OperationState.WAITING,
+            state=state,
             eligible_at=eligible,
         ),
     )
@@ -324,3 +325,36 @@ def test_after_hours_start_advances_to_next_calendar_open() -> None:
         0,
         tzinfo=SEOUL,
     )
+
+
+def test_running_work_continues_before_higher_priority_waiting_work() -> None:
+    result = schedule_operations_event_driven(
+        items=(
+            item(
+                "RUNNING",
+                "LOT-A",
+                "U1",
+                duration=30,
+                state=OperationState.RUNNING,
+            ),
+            item(
+                "WAITING",
+                "LOT-B",
+                "U1",
+                duration=10,
+            ),
+        ),
+        rule=PriorityRule.EDD,
+        static_lot_priorities=(
+            static_priority("LOT-A", deadline=dt(17)),
+            static_priority("LOT-B", deadline=dt(10)),
+        ),
+        resources=resources(),
+        calendar=WorkCalendar(),
+        start_time=dt(9),
+    )
+
+    by_id = {operation.operation_id: operation for operation in result.operations}
+    assert by_id["RUNNING"].start == dt(9)
+    assert by_id["RUNNING"].end == dt(9, 30)
+    assert by_id["WAITING"].start == dt(9, 30)
