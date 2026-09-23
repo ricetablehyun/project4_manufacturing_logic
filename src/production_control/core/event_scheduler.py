@@ -19,8 +19,8 @@ from production_control.core import dispatch_builder, priority_rules
 from production_control.core.calendar_engine import WorkCalendar
 from production_control.core.finite_scheduler import (
     OperationSpec,
-    ScheduleResult,
     ScheduledOperation,
+    ScheduleResult,
 )
 from production_control.core.resource_engine import Resource, ResourceAllocation
 from production_control.core.slot_engine import find_earliest_feasible_slot
