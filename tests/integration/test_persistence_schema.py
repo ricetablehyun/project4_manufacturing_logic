@@ -225,3 +225,42 @@ def test_sqlite_file_database_can_be_reopened(tmp_path) -> None:
 
     assert persisted is not None
     assert persisted.product_code == "RF-MOCK-A"
+
+
+def test_rework_trace_is_stored_on_the_specific_work_attempt() -> None:
+    _, session = seeded_session()
+
+    source_event = WorkEventRow(
+        event_id="evt-return-001",
+        attempt_id="A1",
+        event_type="COMPLETE",
+        occurred_at=dt(11),
+        received_at=dt(11),
+    )
+    session.add(source_event)
+    session.commit()
+
+    session.add(
+        WorkAttemptRow(
+            attempt_id="A2",
+            unit_operation_id="OP1",
+            attempt_no=2,
+            rework_role="TUNING_REWORK",
+            rework_source_ref="OP1",
+            rework_event_ref="evt-return-001",
+            rework_detail="final-test return",
+            active_minutes=0,
+        )
+    )
+    session.commit()
+
+    first = session.get(WorkAttemptRow, "A1")
+    second = session.get(WorkAttemptRow, "A2")
+
+    assert first is not None
+    assert first.rework_role is None
+    assert second is not None
+    assert second.rework_role == "TUNING_REWORK"
+    assert second.rework_source_ref == "OP1"
+    assert second.rework_event_ref == "evt-return-001"
+    assert second.rework_detail == "final-test return"
