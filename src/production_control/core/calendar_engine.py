@@ -155,3 +155,18 @@ class WorkCalendar:
             )
 
         return total
+
+    def working_minutes_until(
+        self,
+        reference: datetime,
+        deadline: datetime,
+    ) -> float:
+        """Return signed WorkCalendar minutes from reference to deadline."""
+
+        local_reference = self._require_aware(reference)
+        local_deadline = self._require_aware(deadline)
+
+        if local_deadline >= local_reference:
+            return self.working_minutes_between(local_reference, local_deadline)
+
+        return -self.working_minutes_between(local_deadline, local_reference)
