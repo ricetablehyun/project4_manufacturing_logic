@@ -7,7 +7,6 @@ from datetime import datetime
 from production_control.core import priority_rules
 from production_control.domain.enums import OperationState
 
-
 _STATE_ORDER = {
     OperationState.RUNNING: 0,
     OperationState.WAITING: 1,
