@@ -12,7 +12,11 @@ def create_sqlite_engine(path: str | Path = ":memory:") -> Engine:
     """Create a SQLite engine with foreign-key enforcement enabled."""
 
     database = str(path)
-    url = "sqlite+pysqlite:///:memory:" if database == ":memory:" else f"sqlite+pysqlite:///{database}"
+    url = (
+        "sqlite+pysqlite:///:memory:"
+        if database == ":memory:"
+        else f"sqlite+pysqlite:///{database}"
+    )
     engine = create_engine(url)
 
     @event.listens_for(engine, "connect")
