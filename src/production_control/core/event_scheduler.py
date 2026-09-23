@@ -24,6 +24,7 @@ from production_control.core.finite_scheduler import (
 )
 from production_control.core.resource_engine import Resource, ResourceAllocation
 from production_control.core.slot_engine import find_earliest_feasible_slot
+from production_control.domain.enums import OperationState
 
 DynamicPriorityProvider = collections.abc.Callable[
     [
@@ -323,6 +324,58 @@ def schedule_operations_event_driven(
                 scheduled_operations=scheduled_operations,
                 decision_time=decision_time,
             )
+        )
+
+        running_items = tuple(
+            item
+            for item in ready_items
+            if item.dispatch.state is OperationState.RUNNING
+        )
+        for item in sorted(
+            running_items,
+            key=lambda candidate: (
+                candidate.dispatch.eligible_at,
+                candidate.operation.unit_id,
+                candidate.operation.operation_id,
+            ),
+        ):
+            slot = find_earliest_feasible_slot(
+                earliest_start=decision_time,
+                duration_minutes=item.operation.duration_minutes,
+                requirements=item.operation.requirements,
+                resources=resources,
+                allocations=allocations,
+                calendar=calendar,
+            )
+            if slot.start != decision_time:
+                raise RuntimeError(
+                    "RUNNING operation cannot continue at the current decision time: "
+                    f"{item.operation.operation_id}"
+                )
+
+            scheduled = ScheduledOperation(
+                operation_id=item.operation.operation_id,
+                lot_id=item.operation.lot_id,
+                unit_id=item.operation.unit_id,
+                step_seq=item.operation.step_seq,
+                process_code=item.operation.process_code,
+                start=slot.start,
+                end=slot.end,
+                segments=slot.segments,
+            )
+            scheduled_by_id[item.operation.operation_id] = scheduled
+            scheduled_operations.append(scheduled)
+            _reserve_resources(
+                operation=item.operation,
+                scheduled=scheduled,
+                allocations=allocations,
+            )
+            pending.remove(item.operation.operation_id)
+
+        ready_items = tuple(
+            item
+            for item in ready_items
+            if item.operation.operation_id in pending
         )
 
         if ready_items:
