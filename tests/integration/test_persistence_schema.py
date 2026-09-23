@@ -133,6 +133,7 @@ def test_work_event_id_is_unique_for_idempotent_persistence() -> None:
     )
     session.add(first)
     session.commit()
+    session.expunge(first)
 
     session.add(
         WorkEventRow(
