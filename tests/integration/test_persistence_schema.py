@@ -44,7 +44,10 @@ def seeded_session():
             process_kind="INTERNAL",
         )
     )
+    session.flush()
+
     session.add(RoutingRow(routing_id="R1", product_id="P1", version=1, active=True))
+    session.flush()
     session.add(
         RoutingStepRow(
             routing_step_id="RS4",
@@ -67,7 +70,9 @@ def seeded_session():
             created_at=dt(8),
         )
     )
+    session.flush()
     session.add(UnitRow(unit_id="U1", lot_id="L1", unit_code="U01", status="ACTIVE"))
+    session.flush()
     session.add(
         UnitOperationRow(
             unit_operation_id="OP1",
@@ -78,6 +83,7 @@ def seeded_session():
             current_attempt_no=1,
         )
     )
+    session.flush()
     session.add(
         WorkAttemptRow(
             attempt_id="A1",
@@ -87,6 +93,7 @@ def seeded_session():
             active_minutes=0,
         )
     )
+    session.flush()
     session.commit()
     return engine, session
 
