@@ -7,13 +7,16 @@ This adapter implements the confirmed V1 boundary:
   expected remaining minutes as its future residual workload.
 - D043: if that worker estimate is missing, Forecast stays WAIT/UNKNOWN and no
   scheduler inputs are emitted.
+- D031/D034: HOLD uses a manager-entered remaining-time override when present;
+  otherwise it falls back to the RoutingStep standard time and exposes that
+  fallback basis for the UI.
 
 The adapter does not create rework operations. Confirmed rework remains a
 separate scheduling input.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 from math import isfinite
@@ -32,6 +35,13 @@ class ForecastReadiness(StrEnum):
     WAIT = "WAIT"
 
 
+class HoldDurationBasis(StrEnum):
+    """Source used for a HOLD Unit's forecast remaining duration."""
+
+    MANAGER_OVERRIDE = "MANAGER_OVERRIDE"
+    STANDARD_FALLBACK = "STANDARD_FALLBACK"
+
+
 @dataclass(frozen=True, slots=True)
 class UnitPaceSchedulingInput:
     """Unfinished normal Unit operation to adapt for scheduling."""
@@ -48,6 +58,8 @@ class UnitPaceSchedulingInput:
     release_buffer_k: int | None = None
     active_minutes: float = 0.0
     expected_remaining_minutes: float | None = None
+    hold_remaining_minutes: float | None = None
+    standard_minutes_per_unit: float | None = None
 
     def __post_init__(self) -> None:
         if not self.operation_id:
@@ -73,6 +85,20 @@ class UnitPaceSchedulingInput:
             raise ValueError(
                 "expected_remaining_minutes must be finite and greater than 0"
             )
+        if self.hold_remaining_minutes is not None and (
+            self.hold_remaining_minutes <= 0
+            or not isfinite(self.hold_remaining_minutes)
+        ):
+            raise ValueError(
+                "hold_remaining_minutes must be finite and greater than 0"
+            )
+        if self.standard_minutes_per_unit is not None and (
+            self.standard_minutes_per_unit <= 0
+            or not isfinite(self.standard_minutes_per_unit)
+        ):
+            raise ValueError(
+                "standard_minutes_per_unit must be finite and greater than 0"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +109,8 @@ class UnitPaceSignal:
     unit_id: str
     pace_overrun_minutes: float
     expected_remaining_minutes: float | None
+    hold_forecast_minutes: float | None
+    hold_duration_basis: HoldDurationBasis | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +142,24 @@ def _validate_group(units: tuple[UnitPaceSchedulingInput, ...]) -> None:
         raise ValueError(
             "adapter input must represent exactly one LOT x process routing step"
         )
+
+
+def resume_held_unit(
+    *,
+    unit: UnitPaceSchedulingInput,
+    resumed_at: datetime,
+) -> UnitPaceSchedulingInput:
+    """Return the planning view after an actual HOLD -> RESUME event."""
+
+    if unit.state is not OperationState.HOLD:
+        raise ValueError("only HOLD operations can be resumed")
+
+    return replace(
+        unit,
+        state=OperationState.RUNNING,
+        eligible_at=max(unit.eligible_at, resumed_at),
+        release_at=max(unit.release_at, resumed_at),
+    )
 
 
 def build_pace_schedule_inputs(
@@ -153,11 +199,27 @@ def build_pace_schedule_inputs(
 
     for unit in unit_tuple:
         pace_overrun = 0.0
+        hold_forecast_minutes: float | None = None
+        hold_duration_basis: HoldDurationBasis | None = None
+
         if unit.state is OperationState.RUNNING:
             pace_overrun = max(
                 unit.active_minutes - forecast.pace_minutes_per_unit,
                 0.0,
             )
+
+        if unit.state is OperationState.HOLD:
+            if unit.hold_remaining_minutes is not None:
+                hold_forecast_minutes = unit.hold_remaining_minutes
+                hold_duration_basis = HoldDurationBasis.MANAGER_OVERRIDE
+            elif unit.standard_minutes_per_unit is not None:
+                hold_forecast_minutes = unit.standard_minutes_per_unit
+                hold_duration_basis = HoldDurationBasis.STANDARD_FALLBACK
+            else:
+                raise ValueError(
+                    "HOLD operation requires hold_remaining_minutes or "
+                    "standard_minutes_per_unit"
+                )
 
         signals.append(
             UnitPaceSignal(
@@ -165,10 +227,14 @@ def build_pace_schedule_inputs(
                 unit_id=unit.unit_id,
                 pace_overrun_minutes=pace_overrun,
                 expected_remaining_minutes=unit.expected_remaining_minutes,
+                hold_forecast_minutes=hold_forecast_minutes,
+                hold_duration_basis=hold_duration_basis,
             )
         )
 
-        if pace_overrun > 0:
+        if unit.state is OperationState.HOLD:
+            duration = hold_forecast_minutes
+        elif pace_overrun > 0:
             if unit.expected_remaining_minutes is None:
                 waiting_operation_ids.append(unit.operation_id)
                 continue
