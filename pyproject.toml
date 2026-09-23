@@ -7,7 +7,9 @@ name = "project4-manufacturing-logic"
 version = "0.1.0"
 description = "Shop-floor production monitoring and schedule replanning core"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "SQLAlchemy>=2.0,<3.0",
+]
 
 [project.optional-dependencies]
 dev = [
