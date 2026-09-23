@@ -25,7 +25,6 @@ from production_control.core.finite_scheduler import (
 from production_control.core.resource_engine import Resource, ResourceAllocation
 from production_control.core.slot_engine import find_earliest_feasible_slot
 
-
 DynamicPriorityProvider = collections.abc.Callable[
     [
         datetime,
