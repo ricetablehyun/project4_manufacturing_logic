@@ -40,27 +40,42 @@ def seed_f02_fixture(session: Session) -> None:
         active=True,
     )
     processes = (
-        ProcessRow("PROCESS-TAPING", "TAPING", "Taping", "INTERNAL"),
         ProcessRow(
-            "PROCESS-EXTERNAL-FEED-BONDING",
-            "EXTERNAL_FEED_BONDING",
-            "External Feed Bonding",
-            "EXTERNAL",
+            process_id="PROCESS-TAPING",
+            process_code="TAPING",
+            name="Taping",
+            process_kind="INTERNAL",
         ),
         ProcessRow(
-            "PROCESS-GENERAL-ASSEMBLY",
-            "GENERAL_ASSEMBLY",
-            "General Assembly",
-            "INTERNAL",
+            process_id="PROCESS-EXTERNAL-FEED-BONDING",
+            process_code="EXTERNAL_FEED_BONDING",
+            name="External Feed Bonding",
+            process_kind="EXTERNAL",
         ),
-        ProcessRow("PROCESS-TUNING", "TUNING", "Tuning", "INTERNAL"),
         ProcessRow(
-            "PROCESS-FINISH-ASSEMBLY",
-            "FINISH_ASSEMBLY",
-            "Finish Assembly",
-            "INTERNAL",
+            process_id="PROCESS-GENERAL-ASSEMBLY",
+            process_code="GENERAL_ASSEMBLY",
+            name="General Assembly",
+            process_kind="INTERNAL",
         ),
-        ProcessRow("PROCESS-FINAL-TEST", "FINAL_TEST", "Final Test", "INTERNAL"),
+        ProcessRow(
+            process_id="PROCESS-TUNING",
+            process_code="TUNING",
+            name="Tuning",
+            process_kind="INTERNAL",
+        ),
+        ProcessRow(
+            process_id="PROCESS-FINISH-ASSEMBLY",
+            process_code="FINISH_ASSEMBLY",
+            name="Finish Assembly",
+            process_kind="INTERNAL",
+        ),
+        ProcessRow(
+            process_id="PROCESS-FINAL-TEST",
+            process_code="FINAL_TEST",
+            name="Final Test",
+            process_kind="INTERNAL",
+        ),
     )
     resources = (
         ResourceRow(
