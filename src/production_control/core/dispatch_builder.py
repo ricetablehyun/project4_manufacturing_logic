@@ -1,6 +1,6 @@
 """Build deterministic scheduler dispatch sequences from LOT priority results."""
 
-from collections.abc import Iterable
+import collections.abc
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -61,8 +61,8 @@ def _rank_same_lot_operations(
 
 def build_dispatch_sequence(
     *,
-    lots: Iterable[LotPriorityInput],
-    operations: Iterable[OperationDispatchInput],
+    lots: collections.abc.Iterable[LotPriorityInput],
+    operations: collections.abc.Iterable[OperationDispatchInput],
     rule: PriorityRule,
 ) -> tuple[str, ...]:
     """Rank LOTs, then apply the confirmed deterministic same-LOT tie-break."""
