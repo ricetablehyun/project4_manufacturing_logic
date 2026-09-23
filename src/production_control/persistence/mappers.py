@@ -20,7 +20,7 @@ def load_active_resources(session: Session) -> dict[str, Resource]:
     ).all()
     return {
         row.resource_code: Resource(
-            resource_code=row.resource_code,
+            code=row.resource_code,
             capacity=row.capacity,
         )
         for row in rows
