@@ -61,22 +61,23 @@ def _validate_inputs(items: tuple[EventDispatchInput, ...]) -> None:
         (
             item.operation.lot_id,
             item.operation.unit_id,
-            item.operation.step_seq,
+            item.operation.precedence_seq,
         )
         for item in items
     ]
     if len(routing_keys) != len(set(routing_keys)):
-        raise ValueError("LOT + Unit + step_seq must be unique")
+        raise ValueError("LOT + Unit + execution order must be unique")
 
 
-def _previous_step_seq(
+def _previous_precedence_seq(
     target: OperationSpec,
     operations: tuple[OperationSpec, ...],
 ) -> int | None:
     earlier_steps = {
-        operation.step_seq
+        operation.precedence_seq
         for operation in operations
-        if operation.lot_id == target.lot_id and operation.step_seq < target.step_seq
+        if operation.lot_id == target.lot_id
+        and operation.precedence_seq < target.precedence_seq
     }
     return max(earlier_steps) if earlier_steps else None
 
@@ -93,7 +94,7 @@ def _predecessors_completed(
         for operation in operations
         if operation.lot_id == target.lot_id
         and operation.unit_id == target.unit_id
-        and operation.step_seq < target.step_seq
+        and operation.precedence_seq < target.precedence_seq
     ]
 
     for predecessor in predecessors:
@@ -113,13 +114,13 @@ def _buffer_released(
     if target.release_buffer_k is None:
         return True
 
-    previous_step = _previous_step_seq(target, operations)
+    previous_step = _previous_precedence_seq(target, operations)
     if previous_step is None:
         raise ValueError("release_buffer_k cannot be set on the first routing step")
 
     downstream_started = any(
         scheduled.lot_id == target.lot_id
-        and scheduled.step_seq == target.step_seq
+        and scheduled.precedence_seq == target.precedence_seq
         and scheduled.start <= decision_time
         for scheduled in scheduled_operations
     )
@@ -130,7 +131,7 @@ def _buffer_released(
         1
         for scheduled in scheduled_operations
         if scheduled.lot_id == target.lot_id
-        and scheduled.step_seq == previous_step
+        and scheduled.precedence_seq == previous_step
         and scheduled.end <= decision_time
     )
     return completed_upstream >= target.release_buffer_k
@@ -362,6 +363,7 @@ def schedule_operations_event_driven(
                 start=slot.start,
                 end=slot.end,
                 segments=slot.segments,
+                execution_seq=item.operation.execution_seq,
             )
             scheduled_by_id[item.operation.operation_id] = scheduled
             scheduled_operations.append(scheduled)
@@ -431,6 +433,7 @@ def schedule_operations_event_driven(
                     start=slot.start,
                     end=slot.end,
                     segments=slot.segments,
+                    execution_seq=item.operation.execution_seq,
                 )
                 scheduled_by_id[operation_id] = scheduled
                 scheduled_operations.append(scheduled)

@@ -31,6 +31,7 @@ class OperationSpec:
     requirements: tuple[ResourceRequirement, ...]
     release_at: datetime
     release_buffer_k: int | None = None
+    execution_seq: int | None = None
 
     def __post_init__(self) -> None:
         if not self.operation_id:
@@ -49,6 +50,14 @@ class OperationSpec:
             raise ValueError("at least one resource requirement is required")
         if self.release_buffer_k is not None and self.release_buffer_k <= 0:
             raise ValueError("release_buffer_k must be greater than 0 when set")
+        if self.execution_seq is not None and self.execution_seq <= 0:
+            raise ValueError("execution_seq must be greater than 0 when set")
+
+    @property
+    def precedence_seq(self) -> int:
+        """Execution-order key; normal routing falls back to RoutingStep sequence."""
+
+        return self.execution_seq if self.execution_seq is not None else self.step_seq
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +72,11 @@ class ScheduledOperation:
     start: datetime
     end: datetime
     segments: tuple[WorkSegment, ...]
+    execution_seq: int | None = None
+
+    @property
+    def precedence_seq(self) -> int:
+        return self.execution_seq if self.execution_seq is not None else self.step_seq
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,11 +104,12 @@ def _validate_inputs(
     if len(operation_ids) != len(set(operation_ids)):
         raise ValueError("operation_id values must be unique")
 
-    routing_keys = [
-        (operation.lot_id, operation.unit_id, operation.step_seq) for operation in operations
+    execution_keys = [
+        (operation.lot_id, operation.unit_id, operation.precedence_seq)
+        for operation in operations
     ]
-    if len(routing_keys) != len(set(routing_keys)):
-        raise ValueError("LOT + Unit + step_seq must be unique")
+    if len(execution_keys) != len(set(execution_keys)):
+        raise ValueError("LOT + Unit + execution order must be unique")
 
     if len(dispatch_sequence) != len(set(dispatch_sequence)):
         raise ValueError("dispatch_sequence must not contain duplicates")
@@ -103,14 +118,15 @@ def _validate_inputs(
         raise ValueError("dispatch_sequence must contain every operation_id exactly once")
 
 
-def _previous_step_seq(
+def _previous_precedence_seq(
     target: OperationSpec,
     operations: tuple[OperationSpec, ...],
 ) -> int | None:
     earlier_steps = {
-        operation.step_seq
+        operation.precedence_seq
         for operation in operations
-        if operation.lot_id == target.lot_id and operation.step_seq < target.step_seq
+        if operation.lot_id == target.lot_id
+        and operation.precedence_seq < target.precedence_seq
     }
     return max(earlier_steps) if earlier_steps else None
 
@@ -126,7 +142,7 @@ def _precedence_earliest_start(
         for operation in operations
         if operation.lot_id == target.lot_id
         and operation.unit_id == target.unit_id
-        and operation.step_seq < target.step_seq
+        and operation.precedence_seq < target.precedence_seq
     ]
 
     if any(predecessor.operation_id not in scheduled_by_id for predecessor in predecessors):
@@ -149,12 +165,13 @@ def _apply_initial_buffer_release(
     if target.release_buffer_k is None:
         return earliest_start
 
-    previous_step = _previous_step_seq(target, operations)
+    previous_step = _previous_precedence_seq(target, operations)
     if previous_step is None:
         raise ValueError("release_buffer_k cannot be set on the first routing step")
 
     downstream_started = any(
-        scheduled.lot_id == target.lot_id and scheduled.step_seq == target.step_seq
+        scheduled.lot_id == target.lot_id
+        and scheduled.precedence_seq == target.precedence_seq
         for scheduled in scheduled_operations
     )
     if downstream_started:
@@ -163,7 +180,8 @@ def _apply_initial_buffer_release(
     upstream_ends = sorted(
         scheduled.end
         for scheduled in scheduled_operations
-        if scheduled.lot_id == target.lot_id and scheduled.step_seq == previous_step
+        if scheduled.lot_id == target.lot_id
+        and scheduled.precedence_seq == previous_step
     )
     if len(upstream_ends) < target.release_buffer_k:
         return None
@@ -257,6 +275,7 @@ def schedule_operations(
                 start=slot.start,
                 end=slot.end,
                 segments=slot.segments,
+                execution_seq=operation.execution_seq,
             )
             scheduled_by_id[operation_id] = scheduled
             scheduled_operations.append(scheduled)

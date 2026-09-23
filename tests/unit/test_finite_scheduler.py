@@ -46,6 +46,7 @@ def op(
     requirements: tuple[ResourceRequirement, ...],
     *,
     buffer_k: int | None = None,
+    execution_seq: int | None = None,
 ) -> OperationSpec:
     return OperationSpec(
         operation_id=operation_id,
@@ -57,6 +58,7 @@ def op(
         requirements=requirements,
         release_at=dt(9),
         release_buffer_k=buffer_k,
+        execution_seq=execution_seq,
     )
 
 
@@ -232,3 +234,59 @@ def test_dispatch_sequence_must_cover_every_operation_exactly_once() -> None:
             resources=resources(),
             calendar=WorkCalendar(),
         )
+
+
+def test_repeated_routing_steps_use_execution_sequence_for_precedence() -> None:
+    operations = (
+        op(
+            "U1-T1",
+            "U1",
+            4,
+            "TUNING",
+            25,
+            tuning(),
+            execution_seq=4,
+        ),
+        op(
+            "U1-F1",
+            "U1",
+            6,
+            "FINAL_TEST",
+            30,
+            worker(),
+            execution_seq=6,
+        ),
+        op(
+            "U1-T2",
+            "U1",
+            4,
+            "TUNING",
+            25,
+            tuning(),
+            execution_seq=7,
+        ),
+        op(
+            "U1-F2",
+            "U1",
+            6,
+            "FINAL_TEST",
+            30,
+            worker(),
+            execution_seq=8,
+        ),
+    )
+
+    result = schedule_operations(
+        operations=operations,
+        dispatch_sequence=("U1-F2", "U1-T2", "U1-F1", "U1-T1"),
+        resources=resources(),
+        calendar=WorkCalendar(),
+    )
+
+    by_id = {operation.operation_id: operation for operation in result.operations}
+    assert by_id["U1-T1"].start == dt(9)
+    assert by_id["U1-F1"].start == by_id["U1-T1"].end
+    assert by_id["U1-T2"].start == by_id["U1-F1"].end
+    assert by_id["U1-F2"].start == by_id["U1-T2"].end
+    assert by_id["U1-T2"].step_seq == 4
+    assert by_id["U1-T2"].execution_seq == 7
