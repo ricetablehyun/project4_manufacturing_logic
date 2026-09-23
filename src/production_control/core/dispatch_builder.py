@@ -4,7 +4,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 
-from production_control.core.priority_rules import LotPriorityInput, PriorityRule, rank_lots
+from production_control.core.priority_rules import (
+    LotPriorityInput,
+    PriorityRule,
+    rank_lots,
+)
 from production_control.domain.enums import OperationState
 
 
