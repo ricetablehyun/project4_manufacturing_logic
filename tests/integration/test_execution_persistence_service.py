@@ -51,6 +51,15 @@ def seed_execution_database(*, process_code: str = "TUNING"):
             process_kind="INTERNAL",
         )
     )
+    if process_code == "FINAL_TEST":
+        session.add(
+            ProcessRow(
+                process_id="PR-TUNING",
+                process_code="TUNING",
+                name="TUNING",
+                process_kind="INTERNAL",
+            )
+        )
     session.flush()
 
     session.add(
@@ -63,12 +72,23 @@ def seed_execution_database(*, process_code: str = "TUNING"):
     )
     session.flush()
 
+    if process_code == "FINAL_TEST":
+        session.add(
+            RoutingStepRow(
+                routing_step_id="RS-TUNING",
+                routing_id="R1",
+                process_id="PR-TUNING",
+                seq_no=1,
+                duration_mode="UNIT_TIME",
+                standard_minutes=25,
+            )
+        )
     session.add(
         RoutingStepRow(
             routing_step_id="RS1",
             routing_id="R1",
             process_id="PR1",
-            seq_no=1,
+            seq_no=2 if process_code == "FINAL_TEST" else 1,
             duration_mode="UNIT_TIME",
             standard_minutes=25,
         )
@@ -97,6 +117,17 @@ def seed_execution_database(*, process_code: str = "TUNING"):
     )
     session.flush()
 
+    if process_code == "FINAL_TEST":
+        session.add(
+            UnitOperationRow(
+                unit_operation_id="OP-TUNING",
+                unit_id="U1",
+                routing_step_id="RS-TUNING",
+                state="COMPLETED",
+                eligible_at=dt(9),
+                current_attempt_no=1,
+            )
+        )
     session.add(
         UnitOperationRow(
             unit_operation_id="OP1",
@@ -109,6 +140,17 @@ def seed_execution_database(*, process_code: str = "TUNING"):
     )
     session.flush()
 
+    if process_code == "FINAL_TEST":
+        session.add(
+            WorkAttemptRow(
+                attempt_id="A-TUNING-1",
+                unit_operation_id="OP-TUNING",
+                attempt_no=1,
+                started_at=dt(9),
+                ended_at=dt(9, 25),
+                active_minutes=25,
+            )
+        )
     session.add(
         WorkAttemptRow(
             attempt_id="A1",
