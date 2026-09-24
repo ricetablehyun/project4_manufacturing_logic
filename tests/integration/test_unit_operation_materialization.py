@@ -1,3 +1,4 @@
+import pytest
 from sqlalchemy import func, select
 
 from production_control.persistence.database import (
@@ -99,9 +100,5 @@ def test_materializing_second_lot_adds_its_own_execution_instances() -> None:
 def test_materialization_rejects_unknown_lot() -> None:
     session = seeded_session()
 
-    try:
+    with pytest.raises(ValueError, match="unknown lot_id: LOT-MISSING"):
         materialize_lot_execution(session=session, lot_id="LOT-MISSING")
-    except ValueError as exc:
-        assert str(exc) == "unknown lot_id: LOT-MISSING"
-    else:
-        raise AssertionError("unknown LOT must be rejected")
