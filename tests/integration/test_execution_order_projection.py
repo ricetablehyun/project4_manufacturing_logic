@@ -1,8 +1,6 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
-
 from production_control.core.execution_state import WorkEventInput, WorkEventType
 from production_control.persistence.database import (
     create_schema,
