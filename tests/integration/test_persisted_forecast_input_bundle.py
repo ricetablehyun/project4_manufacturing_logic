@@ -3,9 +3,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from production_control.core.event_scheduler import schedule_operations_event_driven
 from production_control.core.execution_state import WorkEventInput, WorkEventType
 from production_control.core.pace_estimator import estimate_lot_process_work
 from production_control.core.pace_scheduler_adapter import ForecastReadiness
+from production_control.core.priority_rules import LotPriorityInput, PriorityRule
 from production_control.persistence.database import (
     create_schema,
     create_session_factory,
@@ -15,6 +17,10 @@ from production_control.persistence.execution_service import persist_work_event
 from production_control.persistence.fixture_seed import seed_f02_fixture
 from production_control.persistence.forecast_input_bundle import (
     build_internal_lot_forecast_inputs,
+)
+from production_control.persistence.mappers import (
+    load_active_resources,
+    load_work_calendar,
 )
 from production_control.persistence.materialization import materialize_lot_execution
 
@@ -250,4 +256,45 @@ def test_bundle_rejects_missing_pace_for_current_normal_process() -> None:
             lot_id=LOT_ID,
             pace_by_process=forecasts,
         )
+    session.close()
+
+
+def test_persisted_bundle_flows_into_internal_event_scheduler() -> None:
+    session_factory = seeded_session_factory()
+    session = session_factory()
+
+    bundle = build_internal_lot_forecast_inputs(
+        session=session,
+        lot_id=LOT_ID,
+        pace_by_process=standard_forecasts(),
+    )
+    schedule = schedule_operations_event_driven(
+        items=bundle.items,
+        rule=PriorityRule.EDD,
+        static_lot_priorities=(
+            LotPriorityInput(
+                lot_id=LOT_ID,
+                release_at=dt(9),
+                deadline=dt(15, 30),
+                remaining_work_minutes=340,
+                time_until_deadline_minutes=390,
+            ),
+        ),
+        resources=load_active_resources(session),
+        calendar=load_work_calendar(session, "CALENDAR-NORMAL"),
+        start_time=dt(9),
+    )
+
+    assert len(schedule.operations) == 20
+    assert {
+        operation.operation_id
+        for operation in schedule.operations
+    } == {
+        item.operation.operation_id
+        for item in bundle.items
+    }
+    assert all(
+        operation.execution_seq is not None
+        for operation in schedule.operations
+    )
     session.close()
