@@ -50,7 +50,7 @@ def load_routing_step_requirements(
     ).all()
     if not rows:
         raise ValueError(
-            "rework RoutingStep requires at least one active Resource: "
+            "RoutingStep requires at least one active Resource: "
             f"{routing_step_id}"
         )
 
