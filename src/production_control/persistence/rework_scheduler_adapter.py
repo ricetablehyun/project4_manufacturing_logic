@@ -28,7 +28,7 @@ from production_control.persistence.models import (
 )
 
 
-def _load_requirements(
+def load_routing_step_requirements(
     session: Session,
     *,
     routing_step_id: str,
@@ -110,7 +110,7 @@ def build_waiting_rework_schedule_inputs(
                 f"{operation.routing_step_id}"
             )
 
-        requirements = _load_requirements(
+        requirements = load_routing_step_requirements(
             session,
             routing_step_id=step.routing_step_id,
         )
