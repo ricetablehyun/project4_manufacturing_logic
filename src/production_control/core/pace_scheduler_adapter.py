@@ -60,6 +60,7 @@ class UnitPaceSchedulingInput:
     expected_remaining_minutes: float | None = None
     hold_remaining_minutes: float | None = None
     standard_minutes_per_unit: float | None = None
+    execution_seq: int | None = None
 
     def __post_init__(self) -> None:
         if not self.operation_id:
@@ -99,6 +100,8 @@ class UnitPaceSchedulingInput:
             raise ValueError(
                 "standard_minutes_per_unit must be finite and greater than 0"
             )
+        if self.execution_seq is not None and self.execution_seq <= 0:
+            raise ValueError("execution_seq must be greater than 0 when set")
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +271,7 @@ def build_pace_schedule_inputs(
                 requirements=unit.requirements,
                 release_at=unit.release_at,
                 release_buffer_k=unit.release_buffer_k,
+                execution_seq=unit.execution_seq,
             ),
             dispatch=OperationDispatchInput(
                 operation_id=unit.operation_id,
