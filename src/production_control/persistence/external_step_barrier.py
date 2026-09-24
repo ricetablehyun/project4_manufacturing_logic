@@ -5,6 +5,7 @@ maintains a LOT x RoutingStep expected finish timestamp instead. Forecast uses
 actual finish when known, otherwise the current expected finish.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 
@@ -12,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from production_control.core.event_scheduler import EventDispatchInput
+from production_control.core.pace_estimator import PaceForecast
 from production_control.core.pace_scheduler_adapter import (
     ForecastReadiness,
     UnitPaceSignal,
@@ -174,11 +176,80 @@ def _apply_external_barriers(
     return tuple(adjusted)
 
 
+def save_lot_external_step_state(
+    *,
+    session: Session,
+    lot_id: str,
+    routing_step_id: str,
+    expected_finish_at: datetime | None,
+    actual_finish_at: datetime | None,
+    status: str,
+    updated_at: datetime,
+) -> LotExternalStepRow:
+    """Insert or update one manager-maintained LOT external-step state."""
+
+    if not status:
+        raise ValueError("status must not be empty")
+    for name, value in (
+        ("expected_finish_at", expected_finish_at),
+        ("actual_finish_at", actual_finish_at),
+        ("updated_at", updated_at),
+    ):
+        if value is not None and (
+            value.tzinfo is None or value.utcoffset() is None
+        ):
+            raise ValueError(f"{name} must be timezone-aware")
+
+    lot = session.get(LotRow, lot_id)
+    if lot is None:
+        raise ValueError(f"unknown lot_id: {lot_id}")
+    routing = _load_active_routing(
+        session,
+        product_id=lot.product_id,
+    )
+    step = session.get(RoutingStepRow, routing_step_id)
+    if step is None:
+        raise ValueError(f"unknown routing_step_id: {routing_step_id}")
+    if step.routing_id != routing.routing_id:
+        raise ValueError(
+            "external step does not belong to LOT active Routing: "
+            f"{routing_step_id}"
+        )
+    if step.duration_mode != "LOT_LEAD_TIME":
+        raise ValueError(
+            "LotExternalStep requires LOT_LEAD_TIME RoutingStep: "
+            f"{routing_step_id}"
+        )
+
+    row = session.get(
+        LotExternalStepRow,
+        (lot_id, routing_step_id),
+    )
+    if row is None:
+        row = LotExternalStepRow(
+            lot_id=lot_id,
+            routing_step_id=routing_step_id,
+            expected_finish_at=expected_finish_at,
+            actual_finish_at=actual_finish_at,
+            status=status,
+            updated_at=updated_at,
+        )
+        session.add(row)
+    else:
+        row.expected_finish_at = expected_finish_at
+        row.actual_finish_at = actual_finish_at
+        row.status = status
+        row.updated_at = updated_at
+
+    session.commit()
+    return row
+
+
 def build_full_lot_forecast_inputs(
     *,
     session: Session,
     lot_id: str,
-    pace_by_process,
+    pace_by_process: Mapping[str, PaceForecast],
 ) -> FullLotForecastInputBundle:
     """Build scheduler inputs with external LOT-level barriers applied."""
 
