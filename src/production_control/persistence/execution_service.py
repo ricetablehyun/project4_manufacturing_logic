@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from production_control.core.execution_state import (
@@ -109,6 +109,126 @@ def _load_execution_snapshot(
     return operation, attempt, snapshot
 
 
+def _load_unit_operation_for_process(
+    session: Session,
+    *,
+    unit_id: str,
+    process_code: str,
+) -> UnitOperationRow:
+    operations = session.scalars(
+        select(UnitOperationRow)
+        .join(
+            RoutingStepRow,
+            UnitOperationRow.routing_step_id == RoutingStepRow.routing_step_id,
+        )
+        .join(ProcessRow, RoutingStepRow.process_id == ProcessRow.process_id)
+        .where(
+            UnitOperationRow.unit_id == unit_id,
+            ProcessRow.process_code == process_code,
+        )
+    ).all()
+    if len(operations) != 1:
+        raise ValueError(
+            "expected exactly one UnitOperation for "
+            f"unit={unit_id}, process={process_code}; found {len(operations)}"
+        )
+    return operations[0]
+
+
+def _create_next_rework_attempt(
+    session: Session,
+    *,
+    operation: UnitOperationRow,
+    role: str,
+    source_operation_id: str,
+    source_event_id: str,
+    detail: str,
+    eligible_at: datetime,
+) -> WorkAttemptRow:
+    if operation.state != OperationState.COMPLETED.value:
+        raise ValueError(
+            "rework target UnitOperation must be COMPLETED before a new Attempt"
+        )
+
+    max_attempt_no = session.scalar(
+        select(func.max(WorkAttemptRow.attempt_no)).where(
+            WorkAttemptRow.unit_operation_id == operation.unit_operation_id
+        )
+    )
+    next_attempt_no = int(max_attempt_no or 0) + 1
+    attempt = WorkAttemptRow(
+        attempt_id=(
+            f"ATTEMPT::{operation.unit_operation_id}::{next_attempt_no}"
+        ),
+        unit_operation_id=operation.unit_operation_id,
+        attempt_no=next_attempt_no,
+        active_minutes=0,
+        rework_role=role,
+        rework_source_ref=source_operation_id,
+        rework_event_ref=source_event_id,
+        rework_detail=detail,
+    )
+    session.add(attempt)
+    operation.current_attempt_no = next_attempt_no
+    operation.state = OperationState.WAITING.value
+    operation.eligible_at = eligible_at
+    return attempt
+
+
+def _stage_rework_after_event(
+    *,
+    session: Session,
+    operation: UnitOperationRow,
+    attempt: WorkAttemptRow,
+    applied: WorkEventApplyResult,
+    event: WorkEventInput,
+) -> None:
+    trigger = applied.rework_trigger
+    if trigger is not None:
+        tuning = _load_unit_operation_for_process(
+            session,
+            unit_id=applied.snapshot.unit_id,
+            process_code="TUNING",
+        )
+        _create_next_rework_attempt(
+            session,
+            operation=tuning,
+            role="TUNING_REWORK",
+            source_operation_id=trigger.source_operation_id,
+            source_event_id=trigger.event_id,
+            detail=trigger.reason,
+            eligible_at=trigger.occurred_at,
+        )
+        return
+
+    if (
+        event.event_type is WorkEventType.COMPLETE
+        and applied.snapshot.process_code == "TUNING"
+        and attempt.rework_role == "TUNING_REWORK"
+    ):
+        if not attempt.rework_source_ref:
+            raise ValueError("TUNING_REWORK Attempt is missing its source operation")
+        if not attempt.rework_event_ref:
+            raise ValueError("TUNING_REWORK Attempt is missing its source event")
+        if not attempt.rework_detail:
+            raise ValueError("TUNING_REWORK Attempt is missing its rework detail")
+
+        final_test = _load_unit_operation_for_process(
+            session,
+            unit_id=applied.snapshot.unit_id,
+            process_code="FINAL_TEST",
+        )
+        _create_next_rework_attempt(
+            session,
+            operation=final_test,
+            role="FINAL_TEST_RETEST",
+            source_operation_id=attempt.rework_source_ref,
+            source_event_id=attempt.rework_event_ref,
+            detail=attempt.rework_detail,
+            eligible_at=event.occurred_at,
+        )
+
+
 def persist_work_event(
     *,
     session: Session,
@@ -169,5 +289,13 @@ def persist_work_event(
     if applied.snapshot.result is not None:
         attempt.result = applied.snapshot.result.value
 
+    session.flush()
+    _stage_rework_after_event(
+        session=session,
+        operation=operation,
+        attempt=attempt,
+        applied=applied,
+        event=event,
+    )
     session.commit()
     return applied
