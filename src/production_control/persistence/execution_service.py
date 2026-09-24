@@ -67,10 +67,9 @@ def _load_execution_snapshot(
 
     attempt = _load_current_attempt(session, operation)
     events = session.scalars(
-        select(WorkEventRow)
-        .where(WorkEventRow.attempt_id == attempt.attempt_id)
-        .order_by(WorkEventRow.occurred_at, WorkEventRow.event_id)
+        select(WorkEventRow).where(WorkEventRow.attempt_id == attempt.attempt_id)
     ).all()
+    events.sort(key=lambda row: (row.occurred_at, row.event_id))
 
     state = OperationState(operation.state)
     active_started_at = None
