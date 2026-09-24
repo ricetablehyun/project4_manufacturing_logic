@@ -28,7 +28,7 @@ from production_control.persistence.models import (
 )
 
 
-def _load_requirements(
+def load_routing_step_requirements(
     session: Session,
     *,
     routing_step_id: str,
@@ -50,7 +50,7 @@ def _load_requirements(
     ).all()
     if not rows:
         raise ValueError(
-            "rework RoutingStep requires at least one active Resource: "
+            "RoutingStep requires at least one active Resource: "
             f"{routing_step_id}"
         )
 
@@ -110,7 +110,7 @@ def build_waiting_rework_schedule_inputs(
                 f"{operation.routing_step_id}"
             )
 
-        requirements = _load_requirements(
+        requirements = load_routing_step_requirements(
             session,
             routing_step_id=step.routing_step_id,
         )
