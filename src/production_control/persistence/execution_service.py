@@ -13,6 +13,7 @@ from production_control.core.execution_state import (
     WorkEventType,
     apply_work_event,
 )
+from production_control.core.rework_core import ReworkRole
 from production_control.domain.enums import OperationState
 from production_control.persistence.models import (
     ProcessRow,
@@ -26,7 +27,6 @@ from production_control.persistence.models import (
 
 def _load_current_attempt(
     session: Session,
-    operation: UnitOperationRow,
 ) -> WorkAttemptRow:
     attempt = session.scalar(
         select(WorkAttemptRow).where(
@@ -139,7 +139,7 @@ def _create_next_rework_attempt(
     session: Session,
     *,
     operation: UnitOperationRow,
-    role: str,
+    role: ReworkRole,
     source_operation_id: str,
     source_event_id: str,
     detail: str,
@@ -163,7 +163,7 @@ def _create_next_rework_attempt(
         unit_operation_id=operation.unit_operation_id,
         attempt_no=next_attempt_no,
         active_minutes=0,
-        rework_role=role,
+        rework_role=role.value,
         rework_source_ref=source_operation_id,
         rework_event_ref=source_event_id,
         rework_detail=detail,
@@ -193,7 +193,7 @@ def _stage_rework_after_event(
         _create_next_rework_attempt(
             session,
             operation=tuning,
-            role="TUNING_REWORK",
+            role=ReworkRole.TUNING_REWORK,
             source_operation_id=trigger.source_operation_id,
             source_event_id=trigger.event_id,
             detail=trigger.reason,
@@ -204,7 +204,7 @@ def _stage_rework_after_event(
     if (
         event.event_type is WorkEventType.COMPLETE
         and applied.snapshot.process_code == "TUNING"
-        and attempt.rework_role == "TUNING_REWORK"
+        and attempt.rework_role == ReworkRole.TUNING_REWORK.value
     ):
         if not attempt.rework_source_ref:
             raise ValueError("TUNING_REWORK Attempt is missing its source operation")
@@ -221,7 +221,7 @@ def _stage_rework_after_event(
         _create_next_rework_attempt(
             session,
             operation=final_test,
-            role="FINAL_TEST_RETEST",
+            role=ReworkRole.FINAL_TEST_RETEST,
             source_operation_id=attempt.rework_source_ref,
             source_event_id=attempt.rework_event_ref,
             detail=attempt.rework_detail,
@@ -292,7 +292,6 @@ def persist_work_event(
     session.flush()
     _stage_rework_after_event(
         session=session,
-        operation=operation,
         attempt=attempt,
         applied=applied,
         event=event,
