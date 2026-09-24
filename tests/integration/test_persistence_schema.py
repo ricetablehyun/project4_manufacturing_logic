@@ -106,6 +106,7 @@ def test_schema_contains_confirmed_v1_tables() -> None:
         "calendar_exception",
         "inspection_gate",
         "lot",
+        "lot_external_step",
         "process",
         "product",
         "resource",
