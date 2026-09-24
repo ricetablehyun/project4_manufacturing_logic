@@ -176,6 +176,23 @@ class WorkEventRow(Base):
     received_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
 
 
+class LotExternalStepRow(Base):
+    __tablename__ = "lot_external_step"
+
+    lot_id: Mapped[str] = mapped_column(
+        ForeignKey("lot.lot_id"),
+        primary_key=True,
+    )
+    routing_step_id: Mapped[str] = mapped_column(
+        ForeignKey("routing_step.routing_step_id"),
+        primary_key=True,
+    )
+    expected_finish_at: Mapped[datetime | None] = mapped_column(OffsetDateTime())
+    actual_finish_at: Mapped[datetime | None] = mapped_column(OffsetDateTime())
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
+
+
 class InspectionGateRow(Base):
     __tablename__ = "inspection_gate"
 
