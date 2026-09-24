@@ -27,6 +27,7 @@ from production_control.persistence.models import (
 
 def _load_current_attempt(
     session: Session,
+    operation: UnitOperationRow,
 ) -> WorkAttemptRow:
     attempt = session.scalar(
         select(WorkAttemptRow).where(
@@ -178,7 +179,6 @@ def _create_next_rework_attempt(
 def _stage_rework_after_event(
     *,
     session: Session,
-    operation: UnitOperationRow,
     attempt: WorkAttemptRow,
     applied: WorkEventApplyResult,
     event: WorkEventInput,
