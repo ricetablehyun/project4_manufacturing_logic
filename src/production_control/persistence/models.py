@@ -9,13 +9,14 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     Boolean,
-    DateTime,
     Float,
     ForeignKey,
     Integer,
     String,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from production_control.persistence.types import OffsetDateTime
 
 
 class Base(DeclarativeBase):
@@ -106,10 +107,10 @@ class LotRow(Base):
     )
     lot_code: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-    release_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    release_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
+    due_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
 
 
 class UnitRow(Base):
@@ -131,7 +132,7 @@ class UnitOperationRow(Base):
         nullable=False,
     )
     state: Mapped[str] = mapped_column(String, nullable=False)
-    eligible_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    eligible_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
     hold_remaining_minutes: Mapped[float | None] = mapped_column(Float)
     current_attempt_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
@@ -145,8 +146,8 @@ class WorkAttemptRow(Base):
         nullable=False,
     )
     attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(OffsetDateTime())
+    ended_at: Mapped[datetime | None] = mapped_column(OffsetDateTime())
     result: Mapped[str | None] = mapped_column(String)
     active_minutes: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     rework_role: Mapped[str | None] = mapped_column(String)
@@ -168,11 +169,11 @@ class WorkEventRow(Base):
         nullable=False,
     )
     event_type: Mapped[str] = mapped_column(String, nullable=False)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
     station_code: Mapped[str | None] = mapped_column(String)
     worker_code: Mapped[str | None] = mapped_column(String)
     reason: Mapped[str | None] = mapped_column(String)
-    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
 
 
 class InspectionGateRow(Base):
@@ -185,8 +186,8 @@ class InspectionGateRow(Base):
         ForeignKey("routing_step.routing_step_id"),
         nullable=False,
     )
-    planned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    planned_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(OffsetDateTime())
     status: Mapped[str] = mapped_column(String, nullable=False)
 
 
@@ -210,8 +211,8 @@ class CalendarExceptionRow(Base):
         nullable=False,
     )
     resource_id: Mapped[str | None] = mapped_column(ForeignKey("resource.resource_id"))
-    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    start_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
+    end_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
     exception_type: Mapped[str] = mapped_column(String, nullable=False)
     approval_status: Mapped[str] = mapped_column(String, nullable=False)
 
@@ -228,8 +229,8 @@ class SchedulePlanRow(Base):
         ForeignKey("schedule_plan.plan_id")
     )
     trigger_reason: Mapped[str | None] = mapped_column(String)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
+    approved_at: Mapped[datetime | None] = mapped_column(OffsetDateTime())
     late_lot_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_tardiness_minutes: Mapped[float] = mapped_column(
         Float,
@@ -253,7 +254,7 @@ class ScheduleTaskRow(Base):
         ForeignKey("routing_step.routing_step_id"),
         nullable=False,
     )
-    target_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    target_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    target_start: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
+    target_end: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
     target_qty: Mapped[int] = mapped_column(Integer, nullable=False)
     priority_rank: Mapped[int] = mapped_column(Integer, nullable=False)
