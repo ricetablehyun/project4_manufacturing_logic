@@ -3,10 +3,6 @@
 ScheduleTask priority_rank is a LOT x routing-step planning value. This adapter
 maps each current EventDispatchInput to its matching persisted task and supplies
 an explicit ready-operation order to the policy-neutral event scheduler.
-
-The adapter does not select an approved plan by status. The caller supplies the
-plan_id that is already considered the current approved plan by the planning
-state builder.
 """
 
 from collections.abc import Iterable
@@ -26,6 +22,7 @@ from production_control.persistence.models import (
     SchedulePlanRow,
     ScheduleTaskRow,
 )
+from production_control.persistence.plan_lifecycle import load_current_approved_plan
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,3 +161,18 @@ def build_plan_ready_dispatch_provider(
         return tuple(item.operation.operation_id for item in ranked)
 
     return provider
+
+
+def build_current_plan_ready_dispatch_provider(
+    *,
+    session: Session,
+    items: Iterable[EventDispatchInput],
+) -> ReadyDispatchProvider:
+    """Build Live Forecast dispatch from the latest approved plan version."""
+
+    current = load_current_approved_plan(session=session)
+    return build_plan_ready_dispatch_provider(
+        session=session,
+        plan_id=current.plan_id,
+        items=items,
+    )
