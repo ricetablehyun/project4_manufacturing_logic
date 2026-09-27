@@ -8,11 +8,13 @@ version = "0.1.0"
 description = "Shop-floor production monitoring and schedule replanning core"
 requires-python = ">=3.11"
 dependencies = [
+  "FastAPI>=0.115,<1.0",
   "SQLAlchemy>=2.0,<3.0",
 ]
 
 [project.optional-dependencies]
 dev = [
+  "httpx>=0.27,<1.0",
   "pytest>=8.0",
   "ruff>=0.6",
 ]
