@@ -1,14 +1,15 @@
-"""Event-driven finite-capacity dispatch for dynamic Slack / CR.
+"""Event-driven finite-capacity dispatch for dynamic priority decisions.
 
 The scheduler advances a simulated decision clock. At each decision time it:
 1. finds operations whose routing/release/buffer conditions are satisfied;
-2. calculates LOT priority once for that decision time;
+2. calculates LOT priority once for that decision time, or accepts an explicit
+   ready-operation dispatch order from an upstream planning layer;
 3. starts as many currently feasible operations as Resource capacity allows;
 4. advances to the next meaningful completion/release/calendar/resource event.
 
-Duration estimation, next-Gate resolution, and live RUNNING/HOLD state building
-remain upstream responsibilities. This module schedules the operation durations
-and priority inputs it receives.
+Duration estimation, next-Gate resolution, live RUNNING/HOLD state building,
+and approved-plan interpretation remain upstream responsibilities. This module
+schedules the operation durations and dispatch order it receives.
 """
 
 import collections.abc
@@ -50,6 +51,12 @@ class EventDispatchInput:
             raise ValueError("operation and dispatch lot_id must match")
         if self.operation.unit_id != self.dispatch.unit_id:
             raise ValueError("operation and dispatch unit_id must match")
+
+
+ReadyDispatchProvider = collections.abc.Callable[
+    [datetime, tuple[EventDispatchInput, ...]],
+    collections.abc.Iterable[str],
+]
 
 
 def _validate_inputs(items: tuple[EventDispatchInput, ...]) -> None:
@@ -207,6 +214,30 @@ def _priority_inputs_for_decision(
     )
 
 
+def _validated_ready_dispatch_sequence(
+    *,
+    provider: ReadyDispatchProvider,
+    decision_time: datetime,
+    ready_items: tuple[EventDispatchInput, ...],
+) -> tuple[str, ...]:
+    sequence = tuple(provider(decision_time, ready_items))
+    ready_ids = {item.operation.operation_id for item in ready_items}
+
+    if len(sequence) != len(set(sequence)):
+        raise ValueError("ready dispatch provider returned duplicate operation_id")
+
+    sequence_ids = set(sequence)
+    if sequence_ids != ready_ids:
+        missing = ", ".join(sorted(ready_ids - sequence_ids)) or "none"
+        unknown = ", ".join(sorted(sequence_ids - ready_ids)) or "none"
+        raise ValueError(
+            "ready dispatch provider must return each ready operation exactly once; "
+            f"missing={missing}; unknown={unknown}"
+        )
+
+    return sequence
+
+
 def _next_event_time(
     *,
     decision_time: datetime,
@@ -291,9 +322,17 @@ def schedule_operations_event_driven(
     calendar: WorkCalendar,
     start_time: datetime,
     dynamic_priority_provider: DynamicPriorityProvider | None = None,
+    ready_dispatch_provider: ReadyDispatchProvider | None = None,
     initial_allocations: collections.abc.Iterable[ResourceAllocation] = (),
 ) -> ScheduleResult:
-    """Schedule work using the confirmed event-driven dispatch clock."""
+    """Schedule work using the confirmed event-driven dispatch clock.
+
+    ``ready_dispatch_provider`` is an optional policy-neutral override used by
+    Live Forecast to preserve an already-approved operation order. When it is
+    supplied, the FCFS/EDD/Slack/CR calculation is not consulted for that
+    decision point. Candidate generation continues to use the existing rule
+    path by leaving this provider unset.
+    """
 
     item_tuple = tuple(items)
     _validate_inputs(item_tuple)
@@ -381,32 +420,39 @@ def schedule_operations_event_driven(
         )
 
         if ready_items:
-            priority_inputs = _priority_inputs_for_decision(
-                rule=rule,
-                static_lot_priorities=static_priorities,
-                dynamic_priority_provider=dynamic_priority_provider,
-                decision_time=decision_time,
-                pending_operations=tuple(
-                    by_id[operation_id].operation for operation_id in pending
-                ),
-                scheduled_operations=tuple(scheduled_operations),
-            )
-
-            ready_lot_ids = {item.operation.lot_id for item in ready_items}
-            priority_lot_ids = {lot.lot_id for lot in priority_inputs}
-            missing = ready_lot_ids - priority_lot_ids
-            if missing:
-                missing_text = ", ".join(sorted(missing))
-                raise ValueError(
-                    "priority inputs missing ready LOTs: "
-                    f"{missing_text}"
+            if ready_dispatch_provider is not None:
+                dispatch_sequence = _validated_ready_dispatch_sequence(
+                    provider=ready_dispatch_provider,
+                    decision_time=decision_time,
+                    ready_items=ready_items,
+                )
+            else:
+                priority_inputs = _priority_inputs_for_decision(
+                    rule=rule,
+                    static_lot_priorities=static_priorities,
+                    dynamic_priority_provider=dynamic_priority_provider,
+                    decision_time=decision_time,
+                    pending_operations=tuple(
+                        by_id[operation_id].operation for operation_id in pending
+                    ),
+                    scheduled_operations=tuple(scheduled_operations),
                 )
 
-            dispatch_sequence = dispatch_builder.build_dispatch_sequence(
-                lots=priority_inputs,
-                operations=(item.dispatch for item in ready_items),
-                rule=rule,
-            )
+                ready_lot_ids = {item.operation.lot_id for item in ready_items}
+                priority_lot_ids = {lot.lot_id for lot in priority_inputs}
+                missing = ready_lot_ids - priority_lot_ids
+                if missing:
+                    missing_text = ", ".join(sorted(missing))
+                    raise ValueError(
+                        "priority inputs missing ready LOTs: "
+                        f"{missing_text}"
+                    )
+
+                dispatch_sequence = dispatch_builder.build_dispatch_sequence(
+                    lots=priority_inputs,
+                    operations=(item.dispatch for item in ready_items),
+                    rule=rule,
+                )
 
             for operation_id in dispatch_sequence:
                 if operation_id not in pending:
