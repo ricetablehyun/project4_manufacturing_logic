@@ -35,6 +35,22 @@ class OperationDispatchInput:
             raise ValueError("completed operations must not enter dispatch generation")
 
 
+def operation_tie_break_key(
+    operation: OperationDispatchInput,
+) -> tuple[int, datetime, str]:
+    """Return the confirmed deterministic same-LOT calculation key.
+
+    This key exists for Forecast reproducibility only. It does not create a
+    worker instruction or a new production-priority policy.
+    """
+
+    return (
+        _STATE_ORDER[operation.state],
+        operation.eligible_at,
+        operation.unit_id,
+    )
+
+
 def _rank_same_lot_operations(
     operations: list[OperationDispatchInput],
 ) -> list[OperationDispatchInput]:
@@ -44,14 +60,7 @@ def _rank_same_lot_operations(
     Exact ties preserve caller order.
     """
 
-    return sorted(
-        operations,
-        key=lambda operation: (
-            _STATE_ORDER[operation.state],
-            operation.eligible_at,
-            operation.unit_id,
-        ),
-    )
+    return sorted(operations, key=operation_tie_break_key)
 
 
 def build_dispatch_sequence(
