@@ -2,6 +2,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import func, select
 
 from production_control.core.event_scheduler import schedule_operations_event_driven
 from production_control.core.pace_estimator import estimate_lot_process_work
@@ -23,11 +24,13 @@ from production_control.persistence.mappers import (
     load_work_calendar,
 )
 from production_control.persistence.materialization import materialize_lot_execution
+from production_control.persistence.models import LotExternalStepRow
 
 SEOUL = ZoneInfo("Asia/Seoul")
 
 LOT_ID = "LOT-101"
 EXTERNAL_STEP_ID = "STEP-02-EXTERNAL-FEED-BONDING"
+EXTERNAL_STATE_ID = f"EXT::{LOT_ID}::{EXTERNAL_STEP_ID}"
 
 
 def dt(day: int, hour: int, minute: int = 0) -> datetime:
@@ -101,7 +104,7 @@ def test_missing_external_finish_makes_full_forecast_wait() -> None:
 def test_expected_finish_persists_as_lot_external_barrier() -> None:
     session_factory = seeded_session_factory()
     session = session_factory()
-    save_expected(
+    row = save_expected(
         session,
         expected_finish_at=dt(5, 11),
     )
@@ -111,6 +114,7 @@ def test_expected_finish_persists_as_lot_external_barrier() -> None:
         lot_id=LOT_ID,
     )
 
+    assert row.lot_external_step_id == EXTERNAL_STATE_ID
     assert missing == ()
     assert len(barriers) == 1
     barrier = barriers[0]
@@ -119,6 +123,35 @@ def test_expected_finish_persists_as_lot_external_barrier() -> None:
     assert barrier.step_seq == 2
     assert barrier.finish_at == dt(5, 11)
     assert barrier.finish_basis == "EXPECTED"
+    session.close()
+
+
+def test_updating_expected_finish_reuses_same_external_step_row() -> None:
+    session_factory = seeded_session_factory()
+    session = session_factory()
+    first = save_expected(
+        session,
+        expected_finish_at=dt(5, 11),
+    )
+    second = save_expected(
+        session,
+        expected_finish_at=dt(5, 13),
+    )
+
+    row_count = session.scalar(
+        select(func.count())
+        .select_from(LotExternalStepRow)
+        .where(
+            LotExternalStepRow.lot_id == LOT_ID,
+            LotExternalStepRow.routing_step_id == EXTERNAL_STEP_ID,
+        )
+    )
+    persisted = session.get(LotExternalStepRow, EXTERNAL_STATE_ID)
+
+    assert first.lot_external_step_id == second.lot_external_step_id
+    assert row_count == 1
+    assert persisted is not None
+    assert persisted.expected_finish_at == dt(5, 13)
     session.close()
 
 
