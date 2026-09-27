@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from production_control.core.calendar_engine import WorkCalendar
 from production_control.core.dispatch_builder import OperationDispatchInput
 from production_control.core.event_scheduler import (
     EventDispatchInput,
@@ -24,7 +25,6 @@ from production_control.persistence.plan_dispatch import (
     build_plan_ready_dispatch_provider,
     load_plan_task_priorities,
 )
-from production_control.core.calendar_engine import WorkCalendar
 
 SEOUL = ZoneInfo("Asia/Seoul")
 PLAN_ID = "PLAN-APPROVED-1"
