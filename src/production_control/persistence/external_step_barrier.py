@@ -1,6 +1,6 @@
 """Persist and apply LOT-level external-step Forecast barriers.
 
-D050/D051 keep external production-team work out of UnitOperation. The manager
+D050 keeps external production-team work out of UnitOperation. The manager
 maintains a LOT x RoutingStep expected finish timestamp instead. Forecast uses
 actual finish when known, otherwise the current expected finish.
 """
@@ -52,6 +52,10 @@ class FullLotForecastInputBundle:
     external_barriers: tuple[ExternalStepBarrier, ...]
 
 
+def _external_state_id(lot_id: str, routing_step_id: str) -> str:
+    return f"EXT::{lot_id}::{routing_step_id}"
+
+
 def _load_active_routing(
     session: Session,
     *,
@@ -90,6 +94,26 @@ def _load_external_steps(
     return tuple(rows)
 
 
+def _load_external_state(
+    session: Session,
+    *,
+    lot_id: str,
+    routing_step_id: str,
+) -> LotExternalStepRow | None:
+    rows = session.scalars(
+        select(LotExternalStepRow).where(
+            LotExternalStepRow.lot_id == lot_id,
+            LotExternalStepRow.routing_step_id == routing_step_id,
+        )
+    ).all()
+    if len(rows) > 1:
+        raise ValueError(
+            "duplicate LotExternalStep rows for LOT x RoutingStep: "
+            f"{lot_id} / {routing_step_id}"
+        )
+    return rows[0] if rows else None
+
+
 def load_lot_external_barriers(
     *,
     session: Session,
@@ -112,9 +136,10 @@ def load_lot_external_barriers(
         session,
         routing_id=routing.routing_id,
     ):
-        state = session.get(
-            LotExternalStepRow,
-            (lot_id, step.routing_step_id),
+        state = _load_external_state(
+            session,
+            lot_id=lot_id,
+            routing_step_id=step.routing_step_id,
         )
         if state is None:
             missing.append(step.routing_step_id)
@@ -221,12 +246,14 @@ def save_lot_external_step_state(
             f"{routing_step_id}"
         )
 
-    row = session.get(
-        LotExternalStepRow,
-        (lot_id, routing_step_id),
+    row = _load_external_state(
+        session,
+        lot_id=lot_id,
+        routing_step_id=routing_step_id,
     )
     if row is None:
         row = LotExternalStepRow(
+            lot_external_step_id=_external_state_id(lot_id, routing_step_id),
             lot_id=lot_id,
             routing_step_id=routing_step_id,
             expected_finish_at=expected_finish_at,
@@ -263,10 +290,7 @@ def build_full_lot_forecast_inputs(
         lot_id=lot_id,
     )
 
-    if (
-        internal.readiness is ForecastReadiness.WAIT
-        or missing
-    ):
+    if internal.readiness is ForecastReadiness.WAIT or missing:
         return FullLotForecastInputBundle(
             readiness=ForecastReadiness.WAIT,
             items=(),
