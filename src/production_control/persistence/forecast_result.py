@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session
 
 from production_control.core.finite_scheduler import (
     LotProcessForecast,
-    ScheduleResult,
     ScheduledOperation,
+    ScheduleResult,
     aggregate_lot_process_forecast,
 )
 from production_control.core.pace_scheduler_adapter import ForecastReadiness
