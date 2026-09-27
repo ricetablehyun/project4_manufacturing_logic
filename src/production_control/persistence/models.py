@@ -13,6 +13,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -174,6 +175,31 @@ class WorkEventRow(Base):
     worker_code: Mapped[str | None] = mapped_column(String)
     reason: Mapped[str | None] = mapped_column(String)
     received_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
+
+
+class LotExternalStepRow(Base):
+    __tablename__ = "lot_external_step"
+    __table_args__ = (
+        UniqueConstraint(
+            "lot_id",
+            "routing_step_id",
+            name="uq_lot_external_step_lot_routing_step",
+        ),
+    )
+
+    lot_external_step_id: Mapped[str] = mapped_column(String, primary_key=True)
+    lot_id: Mapped[str] = mapped_column(
+        ForeignKey("lot.lot_id"),
+        nullable=False,
+    )
+    routing_step_id: Mapped[str] = mapped_column(
+        ForeignKey("routing_step.routing_step_id"),
+        nullable=False,
+    )
+    expected_finish_at: Mapped[datetime | None] = mapped_column(OffsetDateTime())
+    actual_finish_at: Mapped[datetime | None] = mapped_column(OffsetDateTime())
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
 
 
 class InspectionGateRow(Base):
