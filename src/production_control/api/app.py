@@ -1,7 +1,8 @@
 """Thin FastAPI boundary over the persisted WorkEvent service."""
 
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from pydantic import BaseModel, Field, field_validator
@@ -61,7 +62,7 @@ def create_app(*, session_factory: sessionmaker[Session]) -> FastAPI:
     def create_work_event(
         payload: WorkEventRequest,
         response: Response,
-        session: Session = Depends(get_session),
+        session: Annotated[Session, Depends(get_session)],
     ) -> WorkEventResponse:
         event = WorkEventInput(
             event_id=payload.event_id,
@@ -75,7 +76,7 @@ def create_app(*, session_factory: sessionmaker[Session]) -> FastAPI:
                 session=session,
                 unit_operation_id=payload.unit_operation_id,
                 event=event,
-                received_at=datetime.now(timezone.utc),
+                received_at=datetime.now(UTC),
                 station_code=payload.station_code,
                 worker_code=payload.worker_code,
             )
