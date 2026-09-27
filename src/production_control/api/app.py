@@ -5,41 +5,11 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Response, status
-from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session, sessionmaker
 
-from production_control.core.execution_state import WorkEventInput, WorkEventType
+from production_control.api.models import WorkEventRequest, WorkEventResponse
+from production_control.core.execution_state import WorkEventInput
 from production_control.persistence.execution_service import persist_work_event
-
-
-class WorkEventRequest(BaseModel):
-    event_id: str = Field(min_length=1)
-    unit_operation_id: str = Field(min_length=1)
-    event_type: WorkEventType
-    occurred_at: datetime
-    station_code: str | None = None
-    worker_code: str | None = None
-    reason: str | None = None
-
-    @field_validator("occurred_at")
-    @classmethod
-    def require_timezone(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("occurred_at must be timezone-aware")
-        return value
-
-
-class WorkEventResponse(BaseModel):
-    event_id: str
-    duplicate: bool
-    operation_id: str
-    lot_id: str
-    unit_id: str
-    process_code: str
-    state: str
-    attempt_no: int
-    active_minutes: float
-    result: str | None
 
 
 def create_app(*, session_factory: sessionmaker[Session]) -> FastAPI:
