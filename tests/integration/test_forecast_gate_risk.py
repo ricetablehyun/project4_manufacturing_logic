@@ -28,7 +28,6 @@ from production_control.persistence.mappers import (
 from production_control.persistence.materialization import materialize_lot_execution
 from production_control.persistence.models import (
     InspectionGateRow,
-    RoutingStepRow,
     UnitOperationRow,
     UnitRow,
     WorkAttemptRow,
@@ -182,7 +181,7 @@ def _mark_final_test_actuals(
         )
         .order_by(UnitRow.unit_id)
     ).all()
-    latest = dt(5, 14)
+    latest = dt(5, 0)
     for index, (operation, unit) in enumerate(operations):
         operation.state = "COMPLETED"
         attempt = session.scalar(
