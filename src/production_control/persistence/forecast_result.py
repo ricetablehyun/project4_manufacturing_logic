@@ -130,9 +130,9 @@ def _actual_completed_unit_ends(
         )
         if attempt is None or attempt.ended_at is None:
             continue
-        # A failed FINAL_TEST does not satisfy a Gate that requires FINAL_TEST.
-        # Until its staged retest exists in the scheduler, the Gate stays unresolved.
-        if process.process_code == "FINAL_TEST" and attempt.result == "FAIL":
+        # FINAL_TEST must have an accepted PASS result before it can satisfy
+        # a Gate. COMPLETE alone or FAIL keeps the Gate requirement unresolved.
+        if process.process_code == "FINAL_TEST" and attempt.result != "PASS":
             continue
         completed[unit.unit_id] = attempt.ended_at
     return completed
@@ -246,10 +246,11 @@ def evaluate_persisted_forecast(
         if session.get(LotRow, lot_id) is None:
             raise ValueError(f"unknown lot_id: {lot_id}")
 
+    selected_lot_ids = set(lot_ids)
     process_forecasts = tuple(
         forecast
         for forecast in aggregate_lot_process_forecast(schedule.operations)
-        if forecast.lot_id in set(lot_ids)
+        if forecast.lot_id in selected_lot_ids
     )
 
     external_barriers: list[ExternalStepBarrier] = []
