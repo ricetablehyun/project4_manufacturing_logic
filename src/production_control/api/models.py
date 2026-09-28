@@ -1,4 +1,4 @@
-"""Transport models for the WorkEvent API."""
+"""Transport models for the Production Control API."""
 
 from datetime import datetime
 
@@ -35,3 +35,40 @@ class WorkEventResponse(BaseModel):
     attempt_no: int
     active_minutes: float
     result: str | None
+
+
+class LotForecastResponse(BaseModel):
+    lot_id: str
+    forecast_end: datetime
+    risk_level: str
+
+
+class GateForecastResponse(BaseModel):
+    gate_id: str
+    lot_id: str
+    required_after_step_id: str
+    gate_type: str
+    planned_at: datetime
+    forecast_at: datetime
+    slack_minutes: float
+    risk_level: str
+
+
+class ProcessForecastResponse(BaseModel):
+    lot_id: str
+    process_code: str
+    forecast_start: datetime
+    forecast_end: datetime
+    scheduled_operation_count: int
+
+
+class LiveForecastResponse(BaseModel):
+    plan_id: str
+    plan_version: int
+    as_of: datetime
+    readiness: str
+    lots: list[LotForecastResponse]
+    gates: list[GateForecastResponse]
+    processes: list[ProcessForecastResponse]
+    missing_gate_ids: list[str]
+    waiting_operation_ids: list[str]
