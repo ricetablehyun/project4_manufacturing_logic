@@ -1,0 +1,161 @@
+from production_control.ui.lot_dashboard_model import (
+    build_lot_progress,
+    build_unit_detail_rows,
+    minimum_gate_slack,
+)
+
+
+def operation(
+    *,
+    lot_id: str = "LOT-101",
+    unit_id: str,
+    unit_code: str,
+    seq_no: int,
+    process_code: str,
+    state: str,
+    active_minutes: float = 0.0,
+    result: str | None = None,
+) -> dict[str, object]:
+    return {
+        "lot_id": lot_id,
+        "unit_id": unit_id,
+        "unit_code": unit_code,
+        "seq_no": seq_no,
+        "process_code": process_code,
+        "state": state,
+        "attempt_no": 1,
+        "active_minutes": active_minutes,
+        "result": result,
+    }
+
+
+def test_build_lot_progress_returns_completion_per_process() -> None:
+    operations = [
+        operation(
+            unit_id="U01",
+            unit_code="U01",
+            seq_no=1,
+            process_code="TAPING",
+            state="COMPLETED",
+        ),
+        operation(
+            unit_id="U02",
+            unit_code="U02",
+            seq_no=1,
+            process_code="TAPING",
+            state="COMPLETED",
+        ),
+        operation(
+            unit_id="U01",
+            unit_code="U01",
+            seq_no=3,
+            process_code="GENERAL_ASSEMBLY",
+            state="RUNNING",
+        ),
+        operation(
+            unit_id="U02",
+            unit_code="U02",
+            seq_no=3,
+            process_code="GENERAL_ASSEMBLY",
+            state="WAITING",
+        ),
+    ]
+
+    summary = build_lot_progress(operations, lot_id="LOT-101")
+
+    taping = summary.processes[0]
+    assembly = summary.processes[1]
+    assert (taping.completed, taping.total, taping.fraction) == (2, 2, 1.0)
+    assert (assembly.completed, assembly.total, assembly.running, assembly.waiting) == (
+        0,
+        2,
+        1,
+        1,
+    )
+    assert summary.current_process_code == "GENERAL_ASSEMBLY"
+
+
+def test_build_lot_progress_ignores_other_lots() -> None:
+    operations = [
+        operation(
+            lot_id="LOT-102",
+            unit_id="LOT-102-U01",
+            unit_code="U01",
+            seq_no=1,
+            process_code="TAPING",
+            state="COMPLETED",
+        )
+    ]
+
+    summary = build_lot_progress(operations, lot_id="LOT-101")
+
+    assert all(process.total == 0 for process in summary.processes)
+    assert summary.current_process_code is None
+
+
+def test_build_unit_detail_rows_uses_earliest_unfinished_process() -> None:
+    operations = [
+        operation(
+            unit_id="U01",
+            unit_code="U01",
+            seq_no=1,
+            process_code="TAPING",
+            state="COMPLETED",
+        ),
+        operation(
+            unit_id="U01",
+            unit_code="U01",
+            seq_no=3,
+            process_code="GENERAL_ASSEMBLY",
+            state="RUNNING",
+            active_minutes=7.5,
+        ),
+        operation(
+            unit_id="U01",
+            unit_code="U01",
+            seq_no=4,
+            process_code="TUNING",
+            state="WAITING",
+        ),
+    ]
+
+    rows = build_unit_detail_rows(operations, lot_id="LOT-101")
+
+    assert rows == (
+        {
+            "unit_code": "U01",
+            "process_code": "GENERAL_ASSEMBLY",
+            "state": "RUNNING",
+            "attempt_no": 1,
+            "active_minutes": 7.5,
+        },
+    )
+
+
+def test_build_unit_detail_rows_keeps_final_test_pending_result_visible() -> None:
+    operations = [
+        operation(
+            unit_id="U01",
+            unit_code="U01",
+            seq_no=6,
+            process_code="FINAL_TEST",
+            state="COMPLETED",
+            result=None,
+        )
+    ]
+
+    rows = build_unit_detail_rows(operations, lot_id="LOT-101")
+
+    assert rows[0]["process_code"] == "FINAL_TEST"
+    assert rows[0]["state"] == "COMPLETED"
+
+
+def test_minimum_gate_slack_returns_tightest_lot_gate() -> None:
+    gates = [
+        {"lot_id": "LOT-101", "slack_minutes": 150},
+        {"lot_id": "LOT-101", "slack_minutes": 45.5},
+        {"lot_id": "LOT-102", "slack_minutes": -10},
+    ]
+
+    assert minimum_gate_slack(gates, lot_id="LOT-101") == 45.5
+    assert minimum_gate_slack(gates, lot_id="LOT-999") is None
