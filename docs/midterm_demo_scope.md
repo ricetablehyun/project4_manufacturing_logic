@@ -22,6 +22,11 @@ Inside each LOT, the dashboard is process-first rather than Unit-first:
 
 This avoids a flat Unit table that repeats the current process for every Unit and makes process WIP easier to inspect.
 
+## Input boundary
+
+- WorkEvent input (`START`, `HOLD`, `RESUME`, `COMPLETE`, `PASS`, `FAIL`) is available from the Streamlit operator tab for the midterm demo.
+- Due-date and inspection-schedule administration already has API-side boundaries, but dedicated administrator input UI is deferred until the production-status screen is settled.
+
 ## Out of scope for this milestone
 
 - Pico 2 WH hardware input
