@@ -63,14 +63,26 @@ def reason_required(*, event_type: str, process_code: str) -> bool:
     )
 
 
-def default_event_time(operation: Mapping[str, Any]) -> datetime:
-    last_event_at = parse_api_datetime(operation.get("last_event_at"))
-    if last_event_at is not None:
-        return last_event_at + timedelta(minutes=10)
+def default_event_time(
+    operation: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+) -> datetime:
+    """Default an operator event to now without violating known lower bounds."""
+
+    reference = now or datetime.now(UTC)
+    if reference.tzinfo is None or reference.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
+
     eligible_at = parse_api_datetime(operation.get("eligible_at"))
-    if eligible_at is not None:
-        return eligible_at
-    return datetime.now(UTC)
+    if eligible_at is not None and eligible_at > reference:
+        reference = eligible_at
+
+    last_event_at = parse_api_datetime(operation.get("last_event_at"))
+    if last_event_at is not None and reference <= last_event_at:
+        reference = last_event_at + timedelta(minutes=10)
+
+    return reference
 
 
 def latest_execution_reference(

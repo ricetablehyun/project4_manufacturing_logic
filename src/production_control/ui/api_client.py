@@ -86,6 +86,18 @@ class ProductionControlApiClient:
             raise ApiClientError(f"API request failed: {exc}") from exc
         return self._decode_response(response)
 
+    def _patch_json(
+        self,
+        path: str,
+        *,
+        json: Mapping[str, object] | None = None,
+    ) -> Any:
+        try:
+            response = self._client.patch(path, json=json)
+        except httpx.HTTPError as exc:
+            raise ApiClientError(f"API request failed: {exc}") from exc
+        return self._decode_response(response)
+
     def get_forecast(self, *, as_of: datetime | None = None) -> dict[str, Any]:
         params = {"as_of": as_of.isoformat()} if as_of is not None else None
         payload = self._get_json("/forecast", params=params)
@@ -117,6 +129,20 @@ class ProductionControlApiClient:
         payload = self._get_json("/unit-operations", params=params)
         if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
             raise ApiClientError("/unit-operations returned an unexpected payload")
+        return payload
+
+    def update_expected_remaining(
+        self,
+        *,
+        unit_operation_id: str,
+        expected_remaining_minutes: float,
+    ) -> dict[str, Any]:
+        payload = self._patch_json(
+            f"/unit-operations/{unit_operation_id}/expected-remaining",
+            json={"expected_remaining_minutes": expected_remaining_minutes},
+        )
+        if not isinstance(payload, dict):
+            raise ApiClientError("expected-remaining update returned an unexpected payload")
         return payload
 
     def create_work_event(

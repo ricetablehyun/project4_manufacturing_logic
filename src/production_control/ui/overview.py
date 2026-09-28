@@ -126,7 +126,7 @@ def _render_lot_detail(
 
     st.markdown("**공정별 계획 및 진행**")
     st.caption(
-        "공식 계획은 LOT×공정 기간으로 관리합니다. Forecast는 현재 실적과 "
+        "공식 계획은 LOT×공정 기간으로 관리합니다. 생산 완료 예상(Forecast)은 현재 실적과 "
         "Unit Active time을 반영한 계산값이며 Unit별 완료예정시각은 표시하지 않습니다."
     )
     st.dataframe(
@@ -136,7 +136,7 @@ def _render_lot_detail(
         column_config={
             "process_code": "공정",
             "plan_window": "계획 기간",
-            "forecast_end": "현재 Forecast 완료",
+            "forecast_end": "생산 완료 예상",
             "progress": "진척",
             "completed_count": "완료",
             "running_count": "작업 중",
@@ -207,7 +207,7 @@ def _render_lot_detail(
                 "gate_type": "검사",
                 "planned_at": "출하검사 시작",
                 "planned_finish_at": "검사 예상 종료",
-                "forecast_at": "내부생산 Forecast 완료",
+                "forecast_at": "생산 완료 예상",
                 "slack_text": "검사 진입 여유",
                 "risk_level": "위험도",
             },
@@ -233,8 +233,8 @@ def _render_overview(
 
     if view.readiness != "READY":
         st.warning(
-            "예상 일정 계산이 완료되지 않았습니다. "
-            "입력 대기 작업 또는 아직 확정되지 않은 입력값을 확인해야 합니다."
+            "생산 완료 예상 계산이 대기 중입니다. 현장 실적 입력에서 표시된 RUNNING 작업의 "
+            "예상 잔여시간을 작업자가 입력하면 다시 계산됩니다."
         )
     if view.missing_gate_ids:
         st.warning("예상 일정 입력이 없는 검사 Gate: " + ", ".join(view.missing_gate_ids))
@@ -262,7 +262,7 @@ def _render_overview(
             risk_col.markdown(_risk_text(row["risk_level"]))
 
             st.caption(
-                "현재 Forecast 완료 · "
+                "생산 완료 예상 · "
                 f"{display_datetime(row['forecast_end'])} · "
                 "출하검사 진입 여유 · "
                 f"{format_duration_minutes(gate_slack)}"
@@ -296,6 +296,8 @@ def _render_operator_input(
     *,
     api_url: str,
     operations: list[dict[str, object]],
+    lot_code_by_id: dict[str, str],
+    waiting_operation_ids: set[str],
 ) -> None:
     st.subheader("현장 작업실적 입력")
     st.caption(
@@ -303,12 +305,29 @@ def _render_operator_input(
         "최종 단계에서는 같은 FastAPI 입력 경로를 Pico가 사용합니다."
     )
 
+    waiting_rows = [
+        row
+        for row in operations
+        if str(row.get("operation_id")) in waiting_operation_ids
+    ]
+    if waiting_rows:
+        waiting_text = ", ".join(
+            f"{row.get('unit_code')} {process_label(row.get('process_code'))}"
+            for row in waiting_rows
+        )
+        st.warning(f"작업자 예상 잔여시간 입력 필요: {waiting_text}")
+
     lot_ids = sorted({str(row["lot_id"]) for row in operations})
     if not lot_ids:
         st.info("입력 가능한 UnitOperation이 없습니다.")
         return
 
-    selected_lot = st.selectbox("LOT", lot_ids, key="operator_lot")
+    selected_lot = st.selectbox(
+        "LOT",
+        lot_ids,
+        format_func=lambda lot_id: lot_code_by_id.get(lot_id, lot_id),
+        key="operator_lot",
+    )
     lot_operations = [row for row in operations if row.get("lot_id") == selected_lot]
     units = {str(row["unit_id"]): str(row["unit_code"]) for row in lot_operations}
     selected_unit = st.selectbox(
@@ -326,36 +345,84 @@ def _render_operator_input(
         st.success("이 Unit의 내부 공정 작업이 모두 완료되었습니다.")
         return
 
+    operation_id = str(operation["operation_id"])
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("현재 공정", process_label(operation["process_code"]))
     col2.metric("현재 상태", status_label(operation["state"]))
     col3.metric("시도 회차", int(operation["attempt_no"]))
     col4.metric("누적 작업시간", f"{float(operation['active_minutes']):.1f}분")
     st.caption(
-        f"작업 ID: {operation['operation_id']} · 작업 가능시각: "
+        f"작업 ID: {operation_id} · 작업 가능시각: "
         f"{display_datetime(operation['eligible_at'])}"
     )
+
+    existing_remaining = operation.get("expected_remaining_minutes")
+    needs_remaining = operation_id in waiting_operation_ids
+    if str(operation.get("state")) == "RUNNING" and (
+        needs_remaining or existing_remaining is not None
+    ):
+        with st.expander("예상 잔여시간 입력/수정", expanded=needs_remaining):
+            if needs_remaining:
+                st.caption(
+                    "현재 작업이 Pace 기준을 초과해 생산 완료 예상 계산이 대기 중입니다. "
+                    "작업자가 앞으로 더 필요한 시간을 입력합니다."
+                )
+            initial_remaining = float(existing_remaining or 10.0)
+            with st.form(f"expected-remaining-form-{operation_id}"):
+                remaining_minutes = st.number_input(
+                    "앞으로 더 필요한 시간(분)",
+                    min_value=1.0,
+                    value=initial_remaining,
+                    step=5.0,
+                    key=f"expected-remaining-input-{operation_id}",
+                )
+                remaining_submitted = st.form_submit_button(
+                    "예상 잔여시간 반영",
+                    use_container_width=True,
+                )
+            if remaining_submitted:
+                try:
+                    with ProductionControlApiClient(base_url=api_url) as client:
+                        client.update_expected_remaining(
+                            unit_operation_id=operation_id,
+                            expected_remaining_minutes=float(remaining_minutes),
+                        )
+                except (ApiClientError, ValueError) as exc:
+                    st.error(f"예상 잔여시간을 반영하지 못했습니다: {exc}")
+                else:
+                    st.session_state["flash_message"] = (
+                        f"{units[selected_unit]} 예상 잔여시간 "
+                        f"{float(remaining_minutes):g}분 반영 완료"
+                    )
+                    st.rerun()
 
     event_types = allowed_event_types(operation)
     if not event_types:
         st.info("현재 상태에서 입력 가능한 이벤트가 없습니다.")
         return
 
-    suggested = default_event_time(operation).astimezone(SEOUL)
-    with st.form("operator-event-form", clear_on_submit=False):
+    suggested = default_event_time(operation, now=datetime.now(UTC)).astimezone(SEOUL)
+    with st.form(f"operator-event-form-{operation_id}", clear_on_submit=False):
         event_type = st.selectbox(
             "작업 이벤트",
             event_types,
             format_func=event_type_label,
+            key=f"operator-event-type-{operation_id}",
         )
-        event_date = st.date_input("발생 날짜", value=suggested.date())
+        event_date = st.date_input(
+            "발생 날짜",
+            value=suggested.date(),
+            key=f"operator-event-date-{operation_id}",
+        )
         event_clock = st.time_input(
             "발생 시각",
             value=suggested.time().replace(tzinfo=None, second=0, microsecond=0),
+            key=f"operator-event-time-{operation_id}",
         )
         reason = st.text_input(
             "사유",
             placeholder="보류(HOLD) 또는 최종시험 불합격(FAIL)에서는 필수",
+            key=f"operator-event-reason-{operation_id}",
         )
         submitted = st.form_submit_button("실적 반영", use_container_width=True)
 
@@ -380,7 +447,7 @@ def _render_operator_input(
         with ProductionControlApiClient(base_url=api_url) as client:
             result = client.create_work_event(
                 event_id=f"UI-{uuid4().hex}",
-                unit_operation_id=str(operation["operation_id"]),
+                unit_operation_id=operation_id,
                 event_type=event_type,
                 occurred_at=occurred_at,
                 reason=reason.strip() or None,
@@ -390,7 +457,7 @@ def _render_operator_input(
         return
 
     st.session_state["flash_message"] = (
-        f"{selected_lot} / {units[selected_unit]} / "
+        f"{lot_code_by_id.get(selected_lot, selected_lot)} / {units[selected_unit]} / "
         f"{process_label(operation['process_code'])}: "
         f"{event_type_label(event_type)} 반영 완료 · 상태 {status_label(result['state'])}"
     )
@@ -565,15 +632,34 @@ def run() -> None:
     view = build_overview_view(forecast=forecast, lots=lots, gates=gates)
     raw_plan_tasks = current_plan.get("tasks", [])
     plan_tasks = [row for row in raw_plan_tasks if isinstance(row, dict)]
+    lot_code_by_id = {
+        str(row["lot_id"]): str(row["lot_code"])
+        for row in lots
+        if "lot_id" in row and "lot_code" in row
+    }
+    waiting_operation_ids = {
+        str(value)
+        for value in forecast.get("waiting_operation_ids", [])
+    }
 
-    overview_tab, operator_tab, replan_tab = st.tabs(
-        ["생산현황", "현장 실적 입력", "재계획"]
+    section = st.radio(
+        "화면",
+        ["생산현황", "현장 실적 입력", "재계획"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="main_section",
     )
-    with overview_tab:
+
+    if section == "생산현황":
         _render_overview(view=view, operations=operations, plan_tasks=plan_tasks)
-    with operator_tab:
-        _render_operator_input(api_url=api_url, operations=operations)
-    with replan_tab:
+    elif section == "현장 실적 입력":
+        _render_operator_input(
+            api_url=api_url,
+            operations=operations,
+            lot_code_by_id=lot_code_by_id,
+            waiting_operation_ids=waiting_operation_ids,
+        )
+    else:
         _render_replan(api_url=api_url, reference_time=reference_time)
 
 
