@@ -138,18 +138,25 @@ def build_process_status_rows(
     process_forecasts: Sequence[Mapping[str, Any]],
     *,
     lot_id: str,
+    plan_tasks: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[dict[str, Any], ...]:
-    """Join process-level Forecast completion with Unit execution state.
+    """Join LOT x process plan/Forecast values with Unit execution state.
 
-    The dashboard follows the confirmed project boundary: Forecast is presented
-    at LOT x process resolution, while UnitOperation remains execution detail.
-    Unit-level scheduler chunks are therefore never presented as individual
-    completion predictions.
+    The confirmed project boundary is preserved: the approved plan and Forecast
+    are presented at LOT x process resolution, while UnitOperation remains the
+    execution-detail layer.  Unit-level scheduler chunks are never presented as
+    individual completion predictions.
     """
 
     forecast_by_process = {
         str(row.get("process_code")): row
         for row in process_forecasts
+        if row.get("lot_id") == lot_id
+        and str(row.get("process_code", "")) in PROCESS_ORDER
+    }
+    plan_by_process = {
+        str(row.get("process_code")): row
+        for row in plan_tasks
         if row.get("lot_id") == lot_id
         and str(row.get("process_code", "")) in PROCESS_ORDER
     }
@@ -161,17 +168,47 @@ def build_process_status_rows(
         total = int(unit_row["total"])
         process_complete = total > 0 and completed == total
         forecast = forecast_by_process.get(process_code, {})
+        plan = plan_by_process.get(process_code, {})
         forecast_end = None if process_complete else forecast.get("forecast_end")
 
         rows.append(
             {
                 **unit_row,
+                "plan_start": plan.get("target_start"),
+                "plan_end": plan.get("target_end"),
                 "forecast_end": forecast_end,
                 "process_complete": process_complete,
             }
         )
 
     return tuple(rows)
+
+
+def build_process_execution_detail_rows(
+    operations: Sequence[Mapping[str, Any]],
+    *,
+    lot_id: str,
+    process_code: str,
+) -> tuple[dict[str, Any], ...]:
+    """Return one row per Unit for a selected LOT x process drill-down."""
+
+    rows = [
+        row
+        for row in operations
+        if row.get("lot_id") == lot_id
+        and str(row.get("process_code")) == process_code
+    ]
+    rows.sort(key=lambda row: str(row.get("unit_code") or row.get("unit_id") or ""))
+    return tuple(
+        {
+            "unit_code": row.get("unit_code") or row.get("unit_id") or "—",
+            "state": row.get("state", "UNKNOWN"),
+            "attempt_no": row.get("attempt_no", 1),
+            "active_minutes": row.get("active_minutes", 0.0),
+            "result": row.get("result"),
+        }
+        for row in rows
+    )
 
 
 def build_unit_detail_rows(
