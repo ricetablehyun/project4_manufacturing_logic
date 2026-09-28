@@ -22,7 +22,9 @@ from production_control.ui.display_labels import (
 from production_control.ui.lot_dashboard_model import (
     build_lot_progress,
     build_process_unit_rows,
+    format_duration_minutes,
     minimum_gate_slack,
+    shipping_inspection_expected_finish,
 )
 from production_control.ui.operator_model import (
     allowed_event_types,
@@ -53,6 +55,15 @@ def _unit_codes_text(value: object) -> str:
     if not isinstance(value, tuple) or not value:
         return "—"
     return ", ".join(str(item) for item in value)
+
+
+def _inspection_finish_text(row: dict[str, object]) -> str:
+    if str(row.get("gate_type")) != "SHIPPING_INSPECTION":
+        return "—"
+    planned_start = parse_api_datetime(row.get("planned_at"))
+    if planned_start is None:
+        return "—"
+    return display_datetime(shipping_inspection_expected_finish(planned_start))
 
 
 def _render_lot_detail(
@@ -113,24 +124,30 @@ def _render_lot_detail(
         {
             "gate_type": gate_type_label(row["gate_type"]),
             "planned_at": display_datetime(row["planned_at"]),
+            "planned_finish_at": _inspection_finish_text(row),
             "forecast_at": display_datetime(row["forecast_at"]),
-            "slack_minutes": row["slack_minutes"],
+            "slack_text": format_duration_minutes(row["slack_minutes"]),
             "risk_level": risk_label(row["risk_level"]),
         }
         for row in view.gate_rows
         if row["lot_id"] == lot_id
     ]
     if gate_rows:
-        st.markdown("**검사 일정**")
+        st.markdown("**품질 통보 검사 일정**")
+        st.caption(
+            "출하검사 시작 전까지 내부 생산이 완료되어야 하며, "
+            "출하검사는 주말을 제외하고 3영업일 진행합니다."
+        )
         st.dataframe(
             gate_rows,
             use_container_width=True,
             hide_index=True,
             column_config={
                 "gate_type": "검사",
-                "planned_at": "검사 예정",
-                "forecast_at": "예상 도달",
-                "slack_minutes": "여유시간(분)",
+                "planned_at": "출하검사 시작",
+                "planned_finish_at": "검사 예상 종료",
+                "forecast_at": "내부생산 예상완료",
+                "slack_text": "검사 진입 여유",
                 "risk_level": "위험도",
             },
         )
@@ -176,14 +193,13 @@ def _render_overview(
             due_col.markdown("**납기**")
             due_col.markdown(display_datetime(row["due_at"]))
 
-            forecast_col.markdown("**예상 완료**")
+            forecast_col.markdown("**내부생산 예상완료**")
             forecast_col.markdown(display_datetime(row["forecast_end"]))
 
             risk_col.markdown("**위험도**")
             risk_col.markdown(_risk_text(row["risk_level"]))
 
-            gate_text = "—" if gate_slack is None else f"{gate_slack:.0f}분"
-            st.caption(f"가장 촉박한 검사 여유 · {gate_text}")
+            st.caption(f"출하검사 진입 여유 · {format_duration_minutes(gate_slack)}")
 
             st.markdown("**공정 진행**")
             process_columns = st.columns(len(progress.processes))
