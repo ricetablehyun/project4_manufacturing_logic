@@ -8,10 +8,14 @@ from fastapi import Depends, FastAPI, HTTPException, Response, status
 from sqlalchemy.orm import Session, sessionmaker
 
 from production_control.api.models import (
+    CandidateKPIResponse,
     GateForecastResponse,
     LiveForecastResponse,
     LotForecastResponse,
     ProcessForecastResponse,
+    ReplanCandidateResponse,
+    ReplanCandidatesResponse,
+    ReplanCandidateTaskResponse,
     WorkEventRequest,
     WorkEventResponse,
 )
@@ -21,6 +25,7 @@ from production_control.persistence.live_forecast import (
     LiveForecastConfig,
     build_live_forecast,
 )
+from production_control.persistence.replan_candidates import build_replan_candidates
 
 
 def create_app(
@@ -38,6 +43,23 @@ def create_app(
             yield session
         finally:
             session.close()
+
+    def require_forecast_config() -> LiveForecastConfig:
+        if forecast_config is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Live Forecast configuration is not available",
+            )
+        return forecast_config
+
+    def resolve_reference_time(as_of: datetime | None) -> datetime:
+        reference_time = as_of or datetime.now(UTC)
+        if reference_time.tzinfo is None or reference_time.utcoffset() is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="as_of must be timezone-aware",
+            )
+        return reference_time
 
     @app.post(
         "/work-events",
@@ -97,24 +119,14 @@ def create_app(
         session: Annotated[Session, Depends(get_session)],
         as_of: datetime | None = None,
     ) -> LiveForecastResponse:
-        if forecast_config is None:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Live Forecast configuration is not available",
-            )
-
-        reference_time = as_of or datetime.now(UTC)
-        if reference_time.tzinfo is None or reference_time.utcoffset() is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="as_of must be timezone-aware",
-            )
+        config = require_forecast_config()
+        reference_time = resolve_reference_time(as_of)
 
         try:
             snapshot = build_live_forecast(
                 session=session,
                 as_of=reference_time,
-                config=forecast_config,
+                config=config,
             )
         except ValueError as exc:
             raise HTTPException(
@@ -174,6 +186,62 @@ def create_app(
             ],
             missing_gate_ids=list(result.missing_gate_ids),
             waiting_operation_ids=list(snapshot.waiting_operation_ids),
+        )
+
+    @app.post("/replan-candidates", response_model=ReplanCandidatesResponse)
+    def create_replan_candidates(
+        session: Annotated[Session, Depends(get_session)],
+        as_of: datetime | None = None,
+    ) -> ReplanCandidatesResponse:
+        config = require_forecast_config()
+        reference_time = resolve_reference_time(as_of)
+
+        try:
+            snapshot = build_replan_candidates(
+                session=session,
+                as_of=reference_time,
+                config=config,
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+
+        return ReplanCandidatesResponse(
+            parent_plan_id=snapshot.parent_plan_id,
+            parent_plan_version=snapshot.parent_plan_version,
+            as_of=snapshot.as_of,
+            risk_level=snapshot.risk_level.name,
+            action=snapshot.action.value,
+            recommended_candidate_id=snapshot.recommended_candidate_id,
+            requires_manager_approval=snapshot.requires_manager_approval,
+            candidates=[
+                ReplanCandidateResponse(
+                    candidate_id=candidate.candidate_id,
+                    rule=candidate.rule.value,
+                    kpi=CandidateKPIResponse(
+                        late_lot_count=candidate.kpi.late_lot_count,
+                        total_tardiness_minutes=(
+                            candidate.kpi.total_tardiness_minutes
+                        ),
+                        overtime_minutes=candidate.kpi.overtime_minutes,
+                        change_count=candidate.kpi.change_count,
+                    ),
+                    tasks=[
+                        ReplanCandidateTaskResponse(
+                            lot_id=task.lot_id,
+                            routing_step_id=task.routing_step_id,
+                            target_start=task.target_start,
+                            target_end=task.target_end,
+                            target_qty=task.target_qty,
+                            priority_rank=task.priority_rank,
+                        )
+                        for task in candidate.tasks
+                    ],
+                )
+                for candidate in snapshot.candidates
+            ],
         )
 
     return app
