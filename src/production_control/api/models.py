@@ -129,3 +129,75 @@ class ReplanApprovalResponse(BaseModel):
     priority_rule: str
     approved_at: datetime
     selected_candidate_id: str
+
+
+class LotAdminResponse(BaseModel):
+    lot_id: str
+    product_id: str
+    lot_code: str
+    quantity: int
+    release_at: datetime
+    due_at: datetime
+    status: str
+    created_at: datetime
+
+
+class LotUpdateRequest(BaseModel):
+    release_at: datetime | None = None
+    due_at: datetime | None = None
+    status: str | None = Field(default=None, min_length=1)
+
+    @field_validator("release_at", "due_at")
+    @classmethod
+    def require_lot_datetime_timezone(cls, value: datetime | None) -> datetime:
+        if value is None:
+            raise ValueError("LOT datetime fields may not be null")
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("LOT datetime fields must be timezone-aware")
+        return value
+
+    @field_validator("status")
+    @classmethod
+    def require_lot_status(cls, value: str | None) -> str:
+        if value is None:
+            raise ValueError("LOT status may not be null")
+        return value
+
+
+class InspectionGateAdminResponse(BaseModel):
+    gate_id: str
+    lot_id: str
+    gate_type: str
+    required_after_step_id: str
+    planned_at: datetime
+    completed_at: datetime | None
+    status: str
+
+
+class InspectionGateUpdateRequest(BaseModel):
+    planned_at: datetime | None = None
+    completed_at: datetime | None = None
+    status: str | None = Field(default=None, min_length=1)
+
+    @field_validator("planned_at")
+    @classmethod
+    def require_planned_at_timezone(cls, value: datetime | None) -> datetime:
+        if value is None:
+            raise ValueError("planned_at may not be null")
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("planned_at must be timezone-aware")
+        return value
+
+    @field_validator("completed_at")
+    @classmethod
+    def require_completed_at_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("completed_at must be timezone-aware when provided")
+        return value
+
+    @field_validator("status")
+    @classmethod
+    def require_gate_status(cls, value: str | None) -> str:
+        if value is None:
+            raise ValueError("InspectionGate status may not be null")
+        return value
