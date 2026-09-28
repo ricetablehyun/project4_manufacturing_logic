@@ -46,6 +46,7 @@ from production_control.persistence.execution_service import (
     update_expected_remaining_minutes,
 )
 from production_control.persistence.live_forecast import LiveForecastConfig, build_live_forecast
+from production_control.persistence.models import WorkAttemptRow
 from production_control.persistence.plan_query import load_current_plan_snapshot
 from production_control.persistence.replan_approval import approve_replan_candidate
 from production_control.persistence.replan_candidates import build_replan_candidates
@@ -83,6 +84,21 @@ def create_app(
                 detail="as_of must be timezone-aware",
             )
         return reference_time
+
+    def waiting_unit_operation_ids(
+        session: Session,
+        attempt_ids: tuple[str, ...],
+    ) -> list[str]:
+        operation_ids: list[str] = []
+        for attempt_id in attempt_ids:
+            attempt = session.get(WorkAttemptRow, attempt_id)
+            if attempt is None:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Forecast WAIT references missing WorkAttempt: {attempt_id}",
+                )
+            operation_ids.append(attempt.unit_operation_id)
+        return operation_ids
 
     @app.post(
         "/work-events",
@@ -361,6 +377,7 @@ def create_app(
                 detail=str(exc),
             ) from exc
 
+        waiting_ids = waiting_unit_operation_ids(session, snapshot.waiting_operation_ids)
         result = snapshot.result
         if result is None:
             return LiveForecastResponse(
@@ -372,7 +389,7 @@ def create_app(
                 gates=[],
                 processes=[],
                 missing_gate_ids=[],
-                waiting_operation_ids=list(snapshot.waiting_operation_ids),
+                waiting_operation_ids=waiting_ids,
             )
 
         return LiveForecastResponse(
@@ -412,7 +429,7 @@ def create_app(
                 for forecast in result.process_forecasts
             ],
             missing_gate_ids=list(result.missing_gate_ids),
-            waiting_operation_ids=list(snapshot.waiting_operation_ids),
+            waiting_operation_ids=waiting_ids,
         )
 
     @app.post("/replan-candidates", response_model=ReplanCandidatesResponse)
@@ -449,9 +466,7 @@ def create_app(
                     rule=candidate.rule.value,
                     kpi=CandidateKPIResponse(
                         late_lot_count=candidate.kpi.late_lot_count,
-                        total_tardiness_minutes=(
-                            candidate.kpi.total_tardiness_minutes
-                        ),
+                        total_tardiness_minutes=candidate.kpi.total_tardiness_minutes,
                         overtime_minutes=candidate.kpi.overtime_minutes,
                         change_count=candidate.kpi.change_count,
                     ),
