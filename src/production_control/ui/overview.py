@@ -86,7 +86,10 @@ def _render_overview(*, api_url: str) -> None:
         },
     )
 
-    st.caption("현재 화면은 D061 read-only Overview입니다. 편집과 재계획 승인은 후속 화면에서 연결합니다.")
+    st.caption(
+        "현재 화면은 D061 read-only Overview입니다. "
+        "편집과 재계획 승인은 후속 화면에서 연결합니다."
+    )
 
 
 def run() -> None:
