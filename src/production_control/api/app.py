@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from production_control.api.execution_models import UnitOperationResponse
 from production_control.api.models import (
     CandidateKPIResponse,
+    CurrentPlanResponse,
+    CurrentPlanTaskResponse,
     GateForecastResponse,
     InspectionGateAdminResponse,
     InspectionGateUpdateRequest,
@@ -40,6 +42,7 @@ from production_control.persistence.live_forecast import (
     LiveForecastConfig,
     build_live_forecast,
 )
+from production_control.persistence.plan_query import load_current_plan_snapshot
 from production_control.persistence.replan_approval import approve_replan_candidate
 from production_control.persistence.replan_candidates import build_replan_candidates
 
@@ -153,6 +156,37 @@ def create_app(
             )
             for row in list_unit_operations(session=session, lot_id=lot_id)
         ]
+
+    @app.get("/schedule-plan/current", response_model=CurrentPlanResponse)
+    def get_current_plan(
+        session: Annotated[Session, Depends(get_session)],
+    ) -> CurrentPlanResponse:
+        try:
+            snapshot = load_current_plan_snapshot(session=session)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+
+        return CurrentPlanResponse(
+            plan_id=snapshot.plan_id,
+            version=snapshot.version,
+            priority_rule=snapshot.priority_rule,
+            tasks=[
+                CurrentPlanTaskResponse(
+                    lot_id=task.lot_id,
+                    routing_step_id=task.routing_step_id,
+                    process_code=task.process_code,
+                    seq_no=task.seq_no,
+                    target_start=task.target_start,
+                    target_end=task.target_end,
+                    target_qty=task.target_qty,
+                    priority_rank=task.priority_rank,
+                )
+                for task in snapshot.tasks
+            ],
+        )
 
     @app.get("/lots", response_model=list[LotAdminResponse])
     def get_lots(
