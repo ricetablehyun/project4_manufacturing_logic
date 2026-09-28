@@ -168,6 +168,12 @@ def create_app(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=str(exc),
             ) from exc
+        except ValueError as exc:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
 
         return LotAdminResponse(
             lot_id=row.lot_id,
