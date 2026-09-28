@@ -41,6 +41,40 @@ def test_demo_bootstrap_serves_fixture_through_real_api_boundary(tmp_path: Path)
     }
 
 
+def test_demo_forecast_handles_running_event_before_normal_work_window(
+    tmp_path: Path,
+) -> None:
+    database_path = initialize_demo_database(tmp_path / "demo.db")
+    client = TestClient(create_demo_app(database_path))
+    started_at = datetime(2026, 9, 29, 8, 39, tzinfo=SEOUL)
+    as_of = datetime(2026, 9, 29, 8, 40, tzinfo=SEOUL)
+
+    started = client.post(
+        "/work-events",
+        json={
+            "event_id": "DEMO-PRE-SHIFT-START",
+            "unit_operation_id": "OP::LOT-101-U01::STEP-01-TAPING",
+            "event_type": "START",
+            "occurred_at": started_at.isoformat(),
+            "station_code": None,
+            "worker_code": None,
+            "reason": None,
+        },
+    )
+    assert started.status_code == 201
+
+    forecast = client.get(
+        "/forecast",
+        params={"as_of": as_of.isoformat()},
+    )
+
+    assert forecast.status_code == 200
+    payload = forecast.json()
+    assert payload["as_of"] == as_of.isoformat()
+    assert payload["readiness"] == "READY"
+    assert payload["waiting_operation_ids"] == []
+
+
 def test_demo_uses_shop_floor_codes_and_realistic_lot_scale(tmp_path: Path) -> None:
     database_path = initialize_demo_database(tmp_path / "demo.db")
     client = TestClient(create_demo_app(database_path))
