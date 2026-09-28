@@ -19,6 +19,11 @@ from production_control.ui.display_labels import (
     risk_label,
     status_label,
 )
+from production_control.ui.lot_dashboard_model import (
+    build_lot_progress,
+    build_unit_detail_rows,
+    minimum_gate_slack,
+)
 from production_control.ui.operator_model import (
     allowed_event_types,
     current_operation_for_unit,
@@ -33,7 +38,107 @@ _DEFAULT_API_URL = "http://127.0.0.1:8000"
 SEOUL = ZoneInfo("Asia/Seoul")
 
 
-def _render_overview(*, view: object) -> None:
+def _risk_text(value: object) -> str:
+    risk = str(value)
+    if risk == "URGENT":
+        return f":red[{risk_label(risk)}]"
+    if risk == "WARNING":
+        return f":orange[{risk_label(risk)}]"
+    if risk == "NORMAL":
+        return f":green[{risk_label(risk)}]"
+    return risk_label(risk)
+
+
+def _render_lot_detail(
+    *,
+    lot_id: str,
+    view: object,
+    operations: list[dict[str, object]],
+) -> None:
+    unit_rows = [
+        {
+            "unit_code": row["unit_code"],
+            "process_code": process_label(row["process_code"]),
+            "state": status_label(row["state"]),
+            "attempt_no": row["attempt_no"],
+            "active_minutes": f"{float(row['active_minutes']):.1f}",
+        }
+        for row in build_unit_detail_rows(operations, lot_id=lot_id)
+    ]
+
+    st.markdown("**Unit 현황**")
+    st.dataframe(
+        unit_rows,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "unit_code": "Unit",
+            "process_code": "현재 공정",
+            "state": "상태",
+            "attempt_no": "시도 회차",
+            "active_minutes": "누적 작업시간(분)",
+        },
+    )
+
+    process_rows = [
+        {
+            "process_code": process_label(row["process_code"]),
+            "forecast_start": display_datetime(row["forecast_start"]),
+            "forecast_end": display_datetime(row["forecast_end"]),
+            "scheduled_operation_count": row["scheduled_operation_count"],
+        }
+        for row in view.process_rows
+        if row["lot_id"] == lot_id
+    ]
+    st.markdown("**공정 예상 일정**")
+    st.dataframe(
+        process_rows,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "process_code": "공정",
+            "forecast_start": "예상 시작",
+            "forecast_end": "예상 종료",
+            "scheduled_operation_count": "작업 수",
+        },
+    )
+
+    gate_rows = [
+        {
+            "gate_type": gate_type_label(row["gate_type"]),
+            "status": status_label(row["status"]),
+            "planned_at": display_datetime(row["planned_at"]),
+            "forecast_at": display_datetime(row["forecast_at"]),
+            "slack_minutes": row["slack_minutes"],
+            "risk_level": risk_label(row["risk_level"]),
+            "completed_at": display_datetime(row["completed_at"]),
+        }
+        for row in view.gate_rows
+        if row["lot_id"] == lot_id
+    ]
+    if gate_rows:
+        st.markdown("**검사 일정**")
+        st.dataframe(
+            gate_rows,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "gate_type": "검사",
+                "status": "상태",
+                "planned_at": "검사 예정",
+                "forecast_at": "예상 도달",
+                "slack_minutes": "여유시간(분)",
+                "risk_level": "위험도",
+                "completed_at": "완료 시각",
+            },
+        )
+
+
+def _render_overview(
+    *,
+    view: object,
+    operations: list[dict[str, object]],
+) -> None:
     plan_col, readiness_col, urgent_col, warning_col, waiting_col = st.columns(5)
     plan_col.metric("현재 승인 계획", f"v{view.plan_version}")
     readiness_col.metric("예상 일정 상태", readiness_label(view.readiness))
@@ -53,87 +158,47 @@ def _render_overview(*, view: object) -> None:
     if view.missing_gate_ids:
         st.warning("예상 일정 입력이 없는 검사 Gate: " + ", ".join(view.missing_gate_ids))
 
-    lot_rows = [
-        {
-            **row,
-            "status": status_label(row["status"]),
-            "due_at": display_datetime(row["due_at"]),
-            "forecast_end": display_datetime(row["forecast_end"]),
-            "risk_level": risk_label(row["risk_level"]),
-        }
-        for row in view.lot_rows
-    ]
+    st.subheader("LOT 생산 현황")
+    st.caption("메인에서는 LOT별 핵심 상태만 확인하고, 필요한 LOT만 열어 상세를 확인합니다.")
 
-    st.subheader("LOT 현황")
-    st.dataframe(
-        lot_rows,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "lot_id": "LOT ID",
-            "lot_code": "LOT 코드",
-            "status": "상태",
-            "quantity": "수량",
-            "due_at": "납기",
-            "forecast_end": "예상 완료",
-            "risk_level": "위험도",
-        },
-    )
+    for row in view.lot_rows:
+        lot_id = str(row["lot_id"])
+        progress = build_lot_progress(operations, lot_id=lot_id)
+        gate_slack = minimum_gate_slack(view.gate_rows, lot_id=lot_id)
 
-    gate_rows = [
-        {
-            **row,
-            "gate_type": gate_type_label(row["gate_type"]),
-            "status": status_label(row["status"]),
-            "planned_at": display_datetime(row["planned_at"]),
-            "forecast_at": display_datetime(row["forecast_at"]),
-            "risk_level": risk_label(row["risk_level"]),
-            "completed_at": display_datetime(row["completed_at"]),
-        }
-        for row in view.gate_rows
-    ]
+        with st.container(border=True):
+            title_col, state_col, risk_col = st.columns([5, 2, 2])
+            title_col.markdown(f"### {row['lot_code']}")
+            title_col.caption(f"{status_label(row['status'])} · {row['quantity']}대")
+            state_col.metric("예상 완료", display_datetime(row["forecast_end"]))
+            risk_col.markdown(f"**위험도**  \n{_risk_text(row['risk_level'])}")
 
-    st.subheader("검사 Gate 위험")
-    st.dataframe(
-        gate_rows,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "gate_id": "검사 Gate ID",
-            "lot_id": "LOT",
-            "gate_type": "검사 종류",
-            "status": "상태",
-            "planned_at": "검사 예정",
-            "forecast_at": "예상 도달",
-            "slack_minutes": "여유시간(분)",
-            "risk_level": "위험도",
-            "completed_at": "완료 시각",
-        },
-    )
+            due_col, gate_col = st.columns(2)
+            due_col.caption(f"납기 · {display_datetime(row['due_at'])}")
+            gate_text = "—" if gate_slack is None else f"{gate_slack:.0f}분"
+            gate_col.caption(f"가장 촉박한 검사 여유 · {gate_text}")
 
-    process_rows = [
-        {
-            **row,
-            "process_code": process_label(row["process_code"]),
-            "forecast_start": display_datetime(row["forecast_start"]),
-            "forecast_end": display_datetime(row["forecast_end"]),
-        }
-        for row in view.process_rows
-    ]
+            st.markdown("**공정 진행**")
+            process_columns = st.columns(len(progress.processes))
+            for process_column, process in zip(
+                process_columns,
+                progress.processes,
+                strict=True,
+            ):
+                process_column.caption(process_label(process.process_code))
+                process_column.progress(process.fraction)
+                process_column.caption(f"{process.completed}/{process.total} 완료")
+                if process.running:
+                    process_column.caption(f"작업 중 {process.running}")
+                elif process.hold:
+                    process_column.caption(f"보류 {process.hold}")
 
-    st.subheader("LOT × 공정 예상 일정")
-    st.dataframe(
-        process_rows,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "lot_id": "LOT",
-            "process_code": "공정",
-            "forecast_start": "예상 시작",
-            "forecast_end": "예상 종료",
-            "scheduled_operation_count": "작업 수",
-        },
-    )
+            with st.expander(f"{row['lot_code']} 상세 보기"):
+                _render_lot_detail(
+                    lot_id=lot_id,
+                    view=view,
+                    operations=operations,
+                )
 
 
 def _render_operator_input(
@@ -154,10 +219,7 @@ def _render_operator_input(
 
     selected_lot = st.selectbox("LOT", lot_ids, key="operator_lot")
     lot_operations = [row for row in operations if row.get("lot_id") == selected_lot]
-    units = {
-        str(row["unit_id"]): str(row["unit_code"])
-        for row in lot_operations
-    }
+    units = {str(row["unit_id"]): str(row["unit_code"]) for row in lot_operations}
     selected_unit = st.selectbox(
         "Unit",
         sorted(units),
@@ -414,7 +476,7 @@ def run() -> None:
         ["생산현황", "현장 실적 입력", "재계획"]
     )
     with overview_tab:
-        _render_overview(view=view)
+        _render_overview(view=view, operations=operations)
     with operator_tab:
         _render_operator_input(api_url=api_url, operations=operations)
     with replan_tab:
