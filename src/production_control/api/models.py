@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from production_control.core.execution_state import WorkEventType
 
@@ -143,6 +143,8 @@ class LotAdminResponse(BaseModel):
 
 
 class LotUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     release_at: datetime | None = None
     due_at: datetime | None = None
     status: str | None = Field(default=None, min_length=1)
@@ -175,6 +177,8 @@ class InspectionGateAdminResponse(BaseModel):
 
 
 class InspectionGateUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     planned_at: datetime | None = None
     completed_at: datetime | None = None
     status: str | None = Field(default=None, min_length=1)
