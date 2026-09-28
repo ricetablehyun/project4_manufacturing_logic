@@ -4,12 +4,23 @@ The midterm milestone demonstrates the software closed loop before the Pico term
 
 ## In scope
 
-1. Production Overview
+1. LOT-first Production Overview
 2. Shop-floor WorkEvent input from Streamlit
 3. Live Forecast and Gate/due-date risk refresh
 4. FCFS / EDD / Slack / CR replanning candidate comparison
 5. Manager approval of one candidate
 6. New Approved Plan reflected by the next Forecast
+
+## Production Overview hierarchy
+
+Inside each LOT, the dashboard is process-first rather than Unit-first:
+
+1. LOT due date / Forecast completion / risk
+2. compact per-process completion progress
+3. process-grouped Unit states: completed / running / hold / waiting
+4. process Forecast and inspection schedule only inside LOT detail
+
+This avoids a flat Unit table that repeats the current process for every Unit and makes process WIP easier to inspect.
 
 ## Out of scope for this milestone
 
