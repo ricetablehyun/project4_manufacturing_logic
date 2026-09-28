@@ -16,10 +16,6 @@ Finite-capacity forecast
 Gate risk
         ↓
 FCFS / EDD / Slack / CR replanning candidates
-        ↓
-Manager approval
-        ↓
-New approved plan
 ```
 
 - 계획/납기 관리 단위: LOT
@@ -28,7 +24,6 @@ New approved plan
 - 자원 제약: Worker Pool, Tuning Station, Test Station
 - 재작업: FINAL_TEST → TUNING → FINAL_TEST
 - 공식 계획: Baseline / Forecast / Replan 분리
-- 관리자 경계: FastAPI → Streamlit; UI는 DB를 직접 수정하지 않음
 
 ## Implementation order
 
@@ -40,16 +35,22 @@ New approved plan
 6. Streamlit dashboard
 7. Raspberry Pi Pico 2 WH terminal
 
-> 현재 단계: Milestone 6 Streamlit administrator dashboard.
+> 현재 단계: Milestone 6 Streamlit dashboard — D061 read-only Overview 구현 중.
 
 ## Streamlit Overview
 
-D061 첫 UI slice는 read-only Overview입니다. 실행 중인 FastAPI에서 `/forecast`, `/lots`, `/inspection-gates`를 읽어 Approved Plan, Forecast readiness, LOT/Gate risk, LOT×Process Forecast를 표시합니다.
+D061 Overview는 기존 FastAPI HTTP 경계만 사용하며 SQLite/SQLAlchemy에 직접 접근하지 않습니다.
 
 ```bash
 pip install -e ".[dev]"
+streamlit run src/production_control/ui/overview.py
+```
+
+기본 FastAPI 주소는 `http://127.0.0.1:8000`이며 환경변수로 변경할 수 있습니다.
+
+```bash
 export PRODUCTION_CONTROL_API_URL=http://127.0.0.1:8000
 streamlit run src/production_control/ui/overview.py
 ```
 
-`PRODUCTION_CONTROL_API_URL`을 생략하면 `http://127.0.0.1:8000`을 사용합니다. Streamlit은 API client 역할만 하며 생산계획 계산과 persistence는 기존 Core/FastAPI 계층을 그대로 사용합니다.
+현재 저장소에는 실행용 FastAPI runtime entrypoint가 아직 없으므로, API 서버가 실행 중이지 않으면 Overview는 연결 오류 상태를 표시하는 것이 정상입니다. 로컬/demo API runtime 구성은 D062에서 별도로 결정합니다.
