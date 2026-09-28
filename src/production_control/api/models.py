@@ -106,3 +106,26 @@ class ReplanCandidatesResponse(BaseModel):
     recommended_candidate_id: str | None
     requires_manager_approval: bool
     candidates: list[ReplanCandidateResponse]
+
+
+class ReplanApprovalRequest(BaseModel):
+    parent_plan_id: str = Field(min_length=1)
+    candidate_id: str = Field(min_length=1)
+    candidate_as_of: datetime
+
+    @field_validator("candidate_as_of")
+    @classmethod
+    def require_candidate_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("candidate_as_of must be timezone-aware")
+        return value
+
+
+class ReplanApprovalResponse(BaseModel):
+    plan_id: str
+    version: int
+    status: str
+    parent_plan_id: str
+    priority_rule: str
+    approved_at: datetime
+    selected_candidate_id: str

@@ -3,6 +3,7 @@
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from sqlalchemy.orm import Session, sessionmaker
@@ -13,6 +14,8 @@ from production_control.api.models import (
     LiveForecastResponse,
     LotForecastResponse,
     ProcessForecastResponse,
+    ReplanApprovalRequest,
+    ReplanApprovalResponse,
     ReplanCandidateResponse,
     ReplanCandidatesResponse,
     ReplanCandidateTaskResponse,
@@ -25,6 +28,7 @@ from production_control.persistence.live_forecast import (
     LiveForecastConfig,
     build_live_forecast,
 )
+from production_control.persistence.replan_approval import approve_replan_candidate
 from production_control.persistence.replan_candidates import build_replan_candidates
 
 
@@ -242,6 +246,52 @@ def create_app(
                 )
                 for candidate in snapshot.candidates
             ],
+        )
+
+    @app.post(
+        "/replan-approvals",
+        response_model=ReplanApprovalResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_replan_approval(
+        payload: ReplanApprovalRequest,
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ReplanApprovalResponse:
+        config = require_forecast_config()
+        approved_at = datetime.now(UTC)
+        plan_id = f"REPLAN-{uuid4().hex}"
+
+        try:
+            result = approve_replan_candidate(
+                session=session,
+                parent_plan_id=payload.parent_plan_id,
+                candidate_id=payload.candidate_id,
+                candidate_as_of=payload.candidate_as_of,
+                approved_at=approved_at,
+                plan_id=plan_id,
+                config=config,
+            )
+        except LookupError as exc:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except (RuntimeError, ValueError) as exc:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+
+        return ReplanApprovalResponse(
+            plan_id=result.plan_id,
+            version=result.version,
+            status=result.status,
+            parent_plan_id=result.parent_plan_id,
+            priority_rule=result.priority_rule,
+            approved_at=result.approved_at,
+            selected_candidate_id=result.selected_candidate_id,
         )
 
     return app
