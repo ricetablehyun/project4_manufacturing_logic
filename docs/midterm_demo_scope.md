@@ -22,6 +22,22 @@ Inside each LOT, the dashboard is process-first rather than Unit-first:
 
 This avoids a flat Unit table that repeats the current process for every Unit and makes process WIP easier to inspect.
 
+## Demo identifiers
+
+- operator-facing LOT codes start from `LOT-001`, `LOT-002`, ...
+- Unit codes are global sequential production numbers and do not reset at each LOT boundary
+- the current two-LOT demo therefore shows `U001` through `U008`
+- persistence primary keys stay unchanged; these shop-floor codes are presentation/business identifiers
+
+## Quality inspection schedule semantics
+
+- the shipping-inspection start time is a quality-team-notified schedule input
+- internal production must be complete before that inspection start time
+- shipping inspection lasts 3 business days, excluding Saturday and Sunday
+- the inspection start day counts as business day 1; e.g. Monday start -> Wednesday 17:00 expected finish
+- the demo due dates are illustrative dates after inspection completion, not an automatic production rule
+- dashboard Gate slack means `quality inspection start - internal production Forecast completion`
+
 ## Input boundary
 
 - WorkEvent input (`START`, `HOLD`, `RESUME`, `COMPLETE`, `PASS`, `FAIL`) is available from the Streamlit operator tab for the midterm demo.
