@@ -153,14 +153,16 @@ def build_live_forecast(
         plan_id=current_plan.plan_id,
         items=item_tuple,
     )
+    calendar = load_work_calendar(session, config.calendar_id)
+    schedule_start_time = calendar.next_work_start(as_of)
     schedule = schedule_operations_event_driven(
         items=item_tuple,
         rule=PriorityRule(current_plan.priority_rule),
         static_lot_priorities=(),
         ready_dispatch_provider=ready_dispatch_provider,
         resources=load_active_resources(session),
-        calendar=load_work_calendar(session, config.calendar_id),
-        start_time=as_of,
+        calendar=calendar,
+        start_time=schedule_start_time,
     )
     result = evaluate_persisted_forecast(
         session=session,
