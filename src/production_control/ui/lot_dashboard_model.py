@@ -133,6 +133,47 @@ def build_process_unit_rows(
     return tuple(rows)
 
 
+def build_process_status_rows(
+    operations: Sequence[Mapping[str, Any]],
+    process_forecasts: Sequence[Mapping[str, Any]],
+    *,
+    lot_id: str,
+) -> tuple[dict[str, Any], ...]:
+    """Join process-level Forecast completion with Unit execution state.
+
+    The dashboard follows the confirmed project boundary: Forecast is presented
+    at LOT x process resolution, while UnitOperation remains execution detail.
+    Unit-level scheduler chunks are therefore never presented as individual
+    completion predictions.
+    """
+
+    forecast_by_process = {
+        str(row.get("process_code")): row
+        for row in process_forecasts
+        if row.get("lot_id") == lot_id
+        and str(row.get("process_code", "")) in PROCESS_ORDER
+    }
+
+    rows: list[dict[str, Any]] = []
+    for unit_row in build_process_unit_rows(operations, lot_id=lot_id):
+        process_code = str(unit_row["process_code"])
+        completed = int(unit_row["completed"])
+        total = int(unit_row["total"])
+        process_complete = total > 0 and completed == total
+        forecast = forecast_by_process.get(process_code, {})
+        forecast_end = None if process_complete else forecast.get("forecast_end")
+
+        rows.append(
+            {
+                **unit_row,
+                "forecast_end": forecast_end,
+                "process_complete": process_complete,
+            }
+        )
+
+    return tuple(rows)
+
+
 def build_unit_detail_rows(
     operations: Sequence[Mapping[str, Any]],
     *,
