@@ -1,5 +1,6 @@
 from production_control.ui.lot_dashboard_model import (
     build_lot_progress,
+    build_process_unit_rows,
     build_unit_detail_rows,
     minimum_gate_slack,
 )
@@ -91,6 +92,53 @@ def test_build_lot_progress_ignores_other_lots() -> None:
 
     assert all(process.total == 0 for process in summary.processes)
     assert summary.current_process_code is None
+
+
+def test_build_process_unit_rows_groups_units_by_process_and_state() -> None:
+    operations = [
+        operation(
+            unit_id="U01",
+            unit_code="U01",
+            seq_no=1,
+            process_code="TAPING",
+            state="COMPLETED",
+        ),
+        operation(
+            unit_id="U02",
+            unit_code="U02",
+            seq_no=1,
+            process_code="TAPING",
+            state="WAITING",
+        ),
+        operation(
+            unit_id="U03",
+            unit_code="U03",
+            seq_no=1,
+            process_code="TAPING",
+            state="HOLD",
+        ),
+        operation(
+            unit_id="U01",
+            unit_code="U01",
+            seq_no=3,
+            process_code="GENERAL_ASSEMBLY",
+            state="RUNNING",
+        ),
+    ]
+
+    rows = build_process_unit_rows(operations, lot_id="LOT-101")
+
+    assert rows[0] == {
+        "process_code": "TAPING",
+        "completed": 1,
+        "total": 3,
+        "completed_units": ("U01",),
+        "running_units": (),
+        "hold_units": ("U03",),
+        "waiting_units": ("U02",),
+    }
+    assert rows[1]["process_code"] == "GENERAL_ASSEMBLY"
+    assert rows[1]["running_units"] == ("U01",)
 
 
 def test_build_unit_detail_rows_uses_earliest_unfinished_process() -> None:
