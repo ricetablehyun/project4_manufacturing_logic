@@ -72,3 +72,37 @@ class LiveForecastResponse(BaseModel):
     processes: list[ProcessForecastResponse]
     missing_gate_ids: list[str]
     waiting_operation_ids: list[str]
+
+
+class CandidateKPIResponse(BaseModel):
+    late_lot_count: int
+    total_tardiness_minutes: float
+    overtime_minutes: float
+    change_count: int
+
+
+class ReplanCandidateTaskResponse(BaseModel):
+    lot_id: str
+    routing_step_id: str
+    target_start: datetime
+    target_end: datetime
+    target_qty: int
+    priority_rank: int
+
+
+class ReplanCandidateResponse(BaseModel):
+    candidate_id: str
+    rule: str
+    kpi: CandidateKPIResponse
+    tasks: list[ReplanCandidateTaskResponse]
+
+
+class ReplanCandidatesResponse(BaseModel):
+    parent_plan_id: str
+    parent_plan_version: int
+    as_of: datetime
+    risk_level: str
+    action: str
+    recommended_candidate_id: str | None
+    requires_manager_approval: bool
+    candidates: list[ReplanCandidateResponse]
