@@ -31,9 +31,7 @@ from production_control.persistence.models import (
     UnitRow,
     WorkAttemptRow,
 )
-from production_control.persistence.pace_snapshot import (
-    effective_attempt_active_minutes,
-)
+from production_control.persistence.pace_snapshot import effective_attempt_active_minutes
 from production_control.persistence.rework_scheduler_adapter import (
     build_waiting_rework_schedule_inputs,
     load_routing_step_requirements,
@@ -64,10 +62,7 @@ def _normal_input_from_projection(
         if projected.rework_role is not None:
             continue
 
-        operation = session.get(
-            UnitOperationRow,
-            projected.unit_operation_id,
-        )
+        operation = session.get(UnitOperationRow, projected.unit_operation_id)
         if operation is None:
             raise ValueError(
                 "projection references missing UnitOperation: "
@@ -75,9 +70,7 @@ def _normal_input_from_projection(
             )
         attempt = session.get(WorkAttemptRow, projected.attempt_id)
         if attempt is None:
-            raise ValueError(
-                f"projection references missing WorkAttempt: {projected.attempt_id}"
-            )
+            raise ValueError(f"projection references missing WorkAttempt: {projected.attempt_id}")
         step = session.get(RoutingStepRow, operation.routing_step_id)
         if step is None:
             raise ValueError(
@@ -85,9 +78,7 @@ def _normal_input_from_projection(
                 f"{operation.routing_step_id}"
             )
         if step.duration_mode != "UNIT_TIME":
-            raise ValueError(
-                "persisted internal forecast bundle only accepts UNIT_TIME steps"
-            )
+            raise ValueError("persisted internal forecast bundle only accepts UNIT_TIME steps")
         if step.standard_minutes is None:
             raise ValueError(
                 f"UNIT_TIME step is missing standard_minutes: {step.routing_step_id}"
@@ -118,6 +109,7 @@ def _normal_input_from_projection(
                 ),
                 release_buffer_k=step.release_buffer_k,
                 active_minutes=active_minutes,
+                expected_remaining_minutes=operation.expected_remaining_minutes,
                 hold_remaining_minutes=operation.hold_remaining_minutes,
                 standard_minutes_per_unit=step.standard_minutes,
                 execution_seq=projected.execution_seq,
@@ -132,10 +124,7 @@ def _group_normal_inputs(
 ) -> dict[tuple[str, int], list[UnitPaceSchedulingInput]]:
     grouped: dict[tuple[str, int], list[UnitPaceSchedulingInput]] = {}
     for item in inputs:
-        grouped.setdefault(
-            (item.process_code, item.step_seq),
-            [],
-        ).append(item)
+        grouped.setdefault((item.process_code, item.step_seq), []).append(item)
     return grouped
 
 
@@ -160,9 +149,7 @@ def build_internal_lot_forecast_inputs(
         raise ValueError(f"unknown lot_id: {lot_id}")
 
     units = session.scalars(
-        select(UnitRow)
-        .where(UnitRow.lot_id == lot_id)
-        .order_by(UnitRow.unit_id)
+        select(UnitRow).where(UnitRow.lot_id == lot_id).order_by(UnitRow.unit_id)
     ).all()
     if not units:
         raise ValueError(f"LOT has no Units: {lot_id}")

@@ -1,8 +1,8 @@
-"""Transport model for operator-facing execution-state reads."""
+"""Transport models for operator-facing execution-state reads and inputs."""
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class UnitOperationResponse(BaseModel):
@@ -19,3 +19,13 @@ class UnitOperationResponse(BaseModel):
     active_minutes: float
     result: str | None
     last_event_at: datetime | None
+    expected_remaining_minutes: float | None
+
+
+class ExpectedRemainingUpdateRequest(BaseModel):
+    expected_remaining_minutes: float = Field(gt=0)
+
+
+class ExpectedRemainingResponse(BaseModel):
+    operation_id: str
+    expected_remaining_minutes: float

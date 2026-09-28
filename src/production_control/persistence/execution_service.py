@@ -1,6 +1,7 @@
 """Transactional WorkEvent persistence backed by the pure execution-state core."""
 
 from datetime import datetime
+from math import isfinite
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -158,9 +159,7 @@ def _create_next_rework_attempt(
     )
     next_attempt_no = int(max_attempt_no or 0) + 1
     attempt = WorkAttemptRow(
-        attempt_id=(
-            f"ATTEMPT::{operation.unit_operation_id}::{next_attempt_no}"
-        ),
+        attempt_id=f"ATTEMPT::{operation.unit_operation_id}::{next_attempt_no}",
         unit_operation_id=operation.unit_operation_id,
         attempt_no=next_attempt_no,
         active_minutes=0,
@@ -173,6 +172,7 @@ def _create_next_rework_attempt(
     operation.current_attempt_no = next_attempt_no
     operation.state = OperationState.WAITING.value
     operation.eligible_at = eligible_at
+    operation.expected_remaining_minutes = None
     return attempt
 
 
@@ -229,6 +229,28 @@ def _stage_rework_after_event(
         )
 
 
+def update_expected_remaining_minutes(
+    *,
+    session: Session,
+    unit_operation_id: str,
+    expected_remaining_minutes: float,
+) -> UnitOperationRow:
+    """Persist a worker estimate for one currently RUNNING operation."""
+
+    if expected_remaining_minutes <= 0 or not isfinite(expected_remaining_minutes):
+        raise ValueError("expected_remaining_minutes must be finite and greater than 0")
+
+    operation = session.get(UnitOperationRow, unit_operation_id)
+    if operation is None:
+        raise LookupError(f"unknown unit_operation_id: {unit_operation_id}")
+    if operation.state != OperationState.RUNNING.value:
+        raise ValueError("expected remaining time can only be set for a RUNNING operation")
+
+    operation.expected_remaining_minutes = float(expected_remaining_minutes)
+    session.commit()
+    return operation
+
+
 def persist_work_event(
     *,
     session: Session,
@@ -270,6 +292,7 @@ def persist_work_event(
     )
 
     operation.state = applied.snapshot.state.value
+    operation.expected_remaining_minutes = None
     attempt.active_minutes = applied.snapshot.active_minutes
 
     if event.event_type is WorkEventType.START and attempt.started_at is None:

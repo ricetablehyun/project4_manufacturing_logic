@@ -8,7 +8,11 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from sqlalchemy.orm import Session, sessionmaker
 
-from production_control.api.execution_models import UnitOperationResponse
+from production_control.api.execution_models import (
+    ExpectedRemainingResponse,
+    ExpectedRemainingUpdateRequest,
+    UnitOperationResponse,
+)
 from production_control.api.models import (
     CandidateKPIResponse,
     CurrentPlanResponse,
@@ -37,11 +41,11 @@ from production_control.persistence.admin_management import (
     update_lot,
 )
 from production_control.persistence.execution_query import list_unit_operations
-from production_control.persistence.execution_service import persist_work_event
-from production_control.persistence.live_forecast import (
-    LiveForecastConfig,
-    build_live_forecast,
+from production_control.persistence.execution_service import (
+    persist_work_event,
+    update_expected_remaining_minutes,
 )
+from production_control.persistence.live_forecast import LiveForecastConfig, build_live_forecast
 from production_control.persistence.plan_query import load_current_plan_snapshot
 from production_control.persistence.replan_approval import approve_replan_candidate
 from production_control.persistence.replan_candidates import build_replan_candidates
@@ -153,9 +157,43 @@ def create_app(
                 active_minutes=row.active_minutes,
                 result=row.result,
                 last_event_at=row.last_event_at,
+                expected_remaining_minutes=row.expected_remaining_minutes,
             )
             for row in list_unit_operations(session=session, lot_id=lot_id)
         ]
+
+    @app.patch(
+        "/unit-operations/{unit_operation_id}/expected-remaining",
+        response_model=ExpectedRemainingResponse,
+    )
+    def patch_expected_remaining(
+        unit_operation_id: str,
+        payload: ExpectedRemainingUpdateRequest,
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ExpectedRemainingResponse:
+        try:
+            operation = update_expected_remaining_minutes(
+                session=session,
+                unit_operation_id=unit_operation_id,
+                expected_remaining_minutes=payload.expected_remaining_minutes,
+            )
+        except LookupError as exc:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except ValueError as exc:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+
+        return ExpectedRemainingResponse(
+            operation_id=operation.unit_operation_id,
+            expected_remaining_minutes=float(operation.expected_remaining_minutes),
+        )
 
     @app.get("/schedule-plan/current", response_model=CurrentPlanResponse)
     def get_current_plan(

@@ -31,6 +31,7 @@ class UnitOperationView:
     active_minutes: float
     result: str | None
     last_event_at: datetime | None
+    expected_remaining_minutes: float | None
 
 
 def _statement(*, lot_id: str | None) -> Select[tuple[object, ...]]:
@@ -58,6 +59,7 @@ def _statement(*, lot_id: str | None) -> Select[tuple[object, ...]]:
             WorkAttemptRow.active_minutes,
             WorkAttemptRow.result,
             latest_event_at.label("last_event_at"),
+            UnitOperationRow.expected_remaining_minutes,
         )
         .join(UnitRow, UnitRow.unit_id == UnitOperationRow.unit_id)
         .join(
@@ -99,6 +101,7 @@ def list_unit_operations(
             active_minutes=float(row.active_minutes or 0.0),
             result=row.result,
             last_event_at=row.last_event_at,
+            expected_remaining_minutes=row.expected_remaining_minutes,
         )
         for row in rows
     )
