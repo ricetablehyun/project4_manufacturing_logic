@@ -21,6 +21,7 @@ from production_control.ui.display_labels import (
 )
 from production_control.ui.lot_dashboard_model import (
     build_lot_progress,
+    build_process_execution_detail_rows,
     build_process_status_rows,
     format_duration_minutes,
     minimum_gate_slack,
@@ -51,10 +52,31 @@ def _risk_text(value: object) -> str:
     return risk_label(risk)
 
 
-def _unit_codes_text(value: object) -> str:
-    if not isinstance(value, tuple) or not value:
+def _compact_datetime(value: object) -> str:
+    parsed = parse_api_datetime(value)
+    if parsed is None:
         return "—"
-    return ", ".join(str(item) for item in value)
+    return parsed.astimezone(SEOUL).strftime("%m/%d %H:%M")
+
+
+def _plan_window_text(row: dict[str, object]) -> str:
+    start = _compact_datetime(row.get("plan_start"))
+    end = _compact_datetime(row.get("plan_end"))
+    if start == "—" and end == "—":
+        return "—"
+    return f"{start} → {end}"
+
+
+def _lot_plan_end(plan_tasks: list[dict[str, object]], *, lot_id: str) -> str:
+    values = [
+        parse_api_datetime(task.get("target_end"))
+        for task in plan_tasks
+        if task.get("lot_id") == lot_id
+    ]
+    datetimes = [value for value in values if value is not None]
+    if not datetimes:
+        return "—"
+    return display_datetime(max(datetimes))
 
 
 def _inspection_finish_text(row: dict[str, object]) -> str:
@@ -72,7 +94,7 @@ def _process_forecast_text(row: dict[str, object]) -> str:
     forecast_end = row.get("forecast_end")
     if forecast_end in (None, "", "—"):
         return "계산 대기"
-    return display_datetime(forecast_end)
+    return _compact_datetime(forecast_end)
 
 
 def _render_lot_detail(
@@ -80,28 +102,32 @@ def _render_lot_detail(
     lot_id: str,
     view: object,
     operations: list[dict[str, object]],
+    plan_tasks: list[dict[str, object]],
 ) -> None:
+    raw_process_rows = build_process_status_rows(
+        operations,
+        view.process_rows,
+        lot_id=lot_id,
+        plan_tasks=plan_tasks,
+    )
     process_rows = [
         {
             "process_code": process_label(row["process_code"]),
-            "progress": f"{row['completed']}/{row['total']}",
+            "plan_window": _plan_window_text(row),
             "forecast_end": _process_forecast_text(row),
-            "completed_units": _unit_codes_text(row["completed_units"]),
-            "running_units": _unit_codes_text(row["running_units"]),
-            "hold_units": _unit_codes_text(row["hold_units"]),
-            "waiting_units": _unit_codes_text(row["waiting_units"]),
+            "progress": f"{row['completed']}/{row['total']}",
+            "completed_count": len(row["completed_units"]),
+            "running_count": len(row["running_units"]),
+            "hold_count": len(row["hold_units"]),
+            "waiting_count": len(row["waiting_units"]),
         }
-        for row in build_process_status_rows(
-            operations,
-            view.process_rows,
-            lot_id=lot_id,
-        )
+        for row in raw_process_rows
     ]
 
-    st.markdown("**공정별 진행 및 예상완료**")
+    st.markdown("**공정별 계획 및 진행**")
     st.caption(
-        "Forecast는 LOT×공정의 전체 예상완료를 표시하고, "
-        "Unit은 해당 공정 안의 실행상태만 보여줍니다."
+        "공식 계획은 LOT×공정 기간으로 관리합니다. Forecast는 현재 실적과 "
+        "Unit Active time을 반영한 계산값이며 Unit별 완료예정시각은 표시하지 않습니다."
     )
     st.dataframe(
         process_rows,
@@ -109,14 +135,51 @@ def _render_lot_detail(
         hide_index=True,
         column_config={
             "process_code": "공정",
+            "plan_window": "계획 기간",
+            "forecast_end": "현재 Forecast 완료",
             "progress": "진척",
-            "forecast_end": "공정 예상완료",
-            "completed_units": "완료 Unit",
-            "running_units": "작업 중 Unit",
-            "hold_units": "보류 Unit",
-            "waiting_units": "대기 Unit",
+            "completed_count": "완료",
+            "running_count": "작업 중",
+            "hold_count": "보류",
+            "waiting_count": "대기",
         },
     )
+
+    process_codes = [str(row["process_code"]) for row in raw_process_rows]
+    if process_codes:
+        st.markdown("**공정 내부 Unit 상세**")
+        selected_process = st.selectbox(
+            "확인할 공정",
+            process_codes,
+            format_func=process_label,
+            key=f"lot-process-detail-{lot_id}",
+        )
+        unit_rows = [
+            {
+                "unit_code": row["unit_code"],
+                "state": status_label(row["state"]),
+                "attempt_no": row["attempt_no"],
+                "active_minutes": f"{float(row['active_minutes']):.1f}",
+                "result": row["result"] or "—",
+            }
+            for row in build_process_execution_detail_rows(
+                operations,
+                lot_id=lot_id,
+                process_code=selected_process,
+            )
+        ]
+        st.dataframe(
+            unit_rows,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "unit_code": "Unit",
+                "state": "상태",
+                "attempt_no": "시도 회차",
+                "active_minutes": "누적 작업시간(분)",
+                "result": "결과",
+            },
+        )
 
     gate_rows = [
         {
@@ -144,7 +207,7 @@ def _render_lot_detail(
                 "gate_type": "검사",
                 "planned_at": "출하검사 시작",
                 "planned_finish_at": "검사 예상 종료",
-                "forecast_at": "내부생산 예상완료",
+                "forecast_at": "내부생산 Forecast 완료",
                 "slack_text": "검사 진입 여유",
                 "risk_level": "위험도",
             },
@@ -155,6 +218,7 @@ def _render_overview(
     *,
     view: object,
     operations: list[dict[str, object]],
+    plan_tasks: list[dict[str, object]],
 ) -> None:
     plan_col, readiness_col, urgent_col, warning_col, waiting_col = st.columns(5)
     plan_col.metric("현재 승인 계획", f"v{view.plan_version}")
@@ -176,7 +240,7 @@ def _render_overview(
         st.warning("예상 일정 입력이 없는 검사 Gate: " + ", ".join(view.missing_gate_ids))
 
     st.subheader("LOT 생산 현황")
-    st.caption("LOT별 납기·예상완료·위험도와 공정 진행을 먼저 확인합니다.")
+    st.caption("LOT별 공정계획·납기·위험도와 현재 실행상태를 먼저 확인합니다.")
 
     for row in view.lot_rows:
         lot_id = str(row["lot_id"])
@@ -184,20 +248,25 @@ def _render_overview(
         gate_slack = minimum_gate_slack(view.gate_rows, lot_id=lot_id)
 
         with st.container(border=True):
-            title_col, due_col, forecast_col, risk_col = st.columns([3.2, 2.2, 2.2, 1.4])
+            title_col, plan_end_col, due_col, risk_col = st.columns([3.2, 2.4, 2.2, 1.2])
             title_col.markdown(f"### {row['lot_code']}")
             title_col.caption(f"{status_label(row['status'])} · {row['quantity']}대")
+
+            plan_end_col.markdown("**내부생산 계획완료**")
+            plan_end_col.markdown(_lot_plan_end(plan_tasks, lot_id=lot_id))
 
             due_col.markdown("**납기**")
             due_col.markdown(display_datetime(row["due_at"]))
 
-            forecast_col.markdown("**내부생산 예상완료**")
-            forecast_col.markdown(display_datetime(row["forecast_end"]))
-
             risk_col.markdown("**위험도**")
             risk_col.markdown(_risk_text(row["risk_level"]))
 
-            st.caption(f"출하검사 진입 여유 · {format_duration_minutes(gate_slack)}")
+            st.caption(
+                "현재 Forecast 완료 · "
+                f"{display_datetime(row['forecast_end'])} · "
+                "출하검사 진입 여유 · "
+                f"{format_duration_minutes(gate_slack)}"
+            )
 
             st.markdown("**공정 진행**")
             process_columns = st.columns(len(progress.processes))
@@ -219,6 +288,7 @@ def _render_overview(
                     lot_id=lot_id,
                     view=view,
                     operations=operations,
+                    plan_tasks=plan_tasks,
                 )
 
 
@@ -485,6 +555,7 @@ def run() -> None:
                 now=datetime.now(UTC),
             )
             forecast = client.get_forecast(as_of=reference_time)
+            current_plan = client.get_current_plan()
             lots = client.list_lots()
             gates = client.list_inspection_gates()
     except (ApiClientError, ValueError) as exc:
@@ -492,12 +563,14 @@ def run() -> None:
         st.stop()
 
     view = build_overview_view(forecast=forecast, lots=lots, gates=gates)
+    raw_plan_tasks = current_plan.get("tasks", [])
+    plan_tasks = [row for row in raw_plan_tasks if isinstance(row, dict)]
 
     overview_tab, operator_tab, replan_tab = st.tabs(
         ["생산현황", "현장 실적 입력", "재계획"]
     )
     with overview_tab:
-        _render_overview(view=view, operations=operations)
+        _render_overview(view=view, operations=operations, plan_tasks=plan_tasks)
     with operator_tab:
         _render_operator_input(api_url=api_url, operations=operations)
     with replan_tab:
