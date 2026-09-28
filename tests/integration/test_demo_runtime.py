@@ -41,6 +41,41 @@ def test_demo_bootstrap_serves_fixture_through_real_api_boundary(tmp_path: Path)
     }
 
 
+def test_demo_uses_shop_floor_codes_and_quality_inspection_schedule(tmp_path: Path) -> None:
+    database_path = initialize_demo_database(tmp_path / "demo.db")
+    client = TestClient(create_demo_app(database_path))
+
+    lots = client.get("/lots")
+    gates = client.get("/inspection-gates")
+    operations = client.get("/unit-operations")
+
+    assert lots.status_code == 200
+    assert gates.status_code == 200
+    assert operations.status_code == 200
+
+    lots_by_id = {row["lot_id"]: row for row in lots.json()}
+    assert lots_by_id["LOT-101"]["lot_code"] == "LOT-001"
+    assert lots_by_id["LOT-102"]["lot_code"] == "LOT-002"
+    assert lots_by_id["LOT-101"]["due_at"].startswith("2026-10-08T17:00")
+    assert lots_by_id["LOT-102"]["due_at"].startswith("2026-10-09T17:00")
+
+    unit_codes = sorted({row["unit_code"] for row in operations.json()})
+    assert unit_codes == [
+        "U001",
+        "U002",
+        "U003",
+        "U004",
+        "U005",
+        "U006",
+        "U007",
+        "U008",
+    ]
+
+    gates_by_lot = {row["lot_id"]: row for row in gates.json()}
+    assert gates_by_lot["LOT-101"]["planned_at"].startswith("2026-10-05T15:30")
+    assert gates_by_lot["LOT-102"]["planned_at"].startswith("2026-10-06T11:00")
+
+
 def test_demo_bootstrap_requires_explicit_reset_to_replace_existing_db(
     tmp_path: Path,
 ) -> None:
