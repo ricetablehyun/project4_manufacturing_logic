@@ -1,6 +1,6 @@
 # LOT / InspectionGate management API contract
 
-Decision references: D058, D059.
+Decision references: D058, D059, D060.
 
 This slice closes the remaining FastAPI Milestone 5 management scope without
 turning already-materialized production data into unrestricted CRUD.
@@ -32,6 +32,20 @@ Only these fields are mutable in D059:
 
 `release_at` and `due_at` must be timezone-aware. `status` must be a non-empty
 string. This slice does not invent a new LOT status-transition policy.
+
+D060 adds one consistency rule for `release_at` because materialization copies
+that timestamp into each UnitOperation's initial `eligible_at`:
+
+- if the LOT has no WorkEvent yet, changing `release_at` is allowed and all
+  already-materialized UnitOperation `eligible_at` values for that LOT are
+  updated to the same timestamp in the same transaction;
+- once any WorkEvent exists for the LOT, changing `release_at` is rejected with
+  `409 Conflict`;
+- a request that includes a forbidden `release_at` change is atomic: other LOT
+  changes in the same PATCH are not partially committed.
+
+`due_at` and `status` remain independently mutable after WorkEvents because D060
+only protects the copied release/eligibility invariant.
 
 Structural/materialization fields such as `lot_id`, `product_id`, `lot_code`,
 and `quantity` are not accepted by the patch model. Extra fields are rejected
@@ -93,4 +107,6 @@ simple CRUD endpoint.
 The FastAPI routes remain thin and delegate reads/updates to
 `production_control.persistence.admin_management`. The service updates only the
 D059-approved mutable columns and commits the existing row; it does not create
-or delete LOTs, gates, Units, operations, or plans.
+or delete LOTs, gates, Units, operations, or plans. D060's only cross-row update
+is the pre-execution synchronization of LOT `release_at` to existing
+UnitOperation `eligible_at` values.
