@@ -249,7 +249,7 @@ def _candidate_tasks(
     session: Session,
     schedule: ScheduleResult,
     parent_priorities: tuple[PlanTaskPriority, ...],
-) -> tuple[ReplanCandidateTask, ...]:
+) -> tuple[tuple[ReplanCandidateTask, ...], int]:
     priority_by_key = {
         priority.operation_key: priority
         for priority in parent_priorities
