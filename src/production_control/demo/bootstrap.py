@@ -13,7 +13,13 @@ from production_control.persistence.database import (
 )
 from production_control.persistence.fixture_seed import seed_f02_fixture
 from production_control.persistence.materialization import materialize_lot_execution
-from production_control.persistence.models import SchedulePlanRow, ScheduleTaskRow
+from production_control.persistence.models import (
+    InspectionGateRow,
+    LotRow,
+    SchedulePlanRow,
+    ScheduleTaskRow,
+    UnitRow,
+)
 
 SEOUL = ZoneInfo("Asia/Seoul")
 DEFAULT_DEMO_DB_PATH = Path("data/demo.db")
@@ -30,6 +36,69 @@ DEMO_INTERNAL_STEPS = (
 
 def _dt(hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 10, 5, hour, minute, tzinfo=SEOUL)
+
+
+def _demo_date(day: int, hour: int, minute: int = 0) -> datetime:
+    return datetime(2026, 10, day, hour, minute, tzinfo=SEOUL)
+
+
+def apply_demo_fixture_overrides(session: Session) -> None:
+    """Apply presentation-only identifiers and a coherent demo inspection timeline.
+
+    Internal primary keys stay unchanged so the approved F02 fixture and its
+    regression tests remain stable.  The operator-facing LOT/Unit codes follow
+    the confirmed shop-floor convention: LOT codes start at 001 and Unit codes
+    continue across LOT boundaries instead of resetting per LOT.
+
+    Shipping-inspection ``planned_at`` means the quality-team-notified
+    inspection *start* time.  The three-business-day inspection duration is a
+    confirmed demo/domain convention, while the demo due dates below are only
+    illustrative dates after inspection completion, not an automatic due-date
+    rule.
+    """
+
+    lot_specs = (
+        (
+            "LOT-101",
+            "LOT-001",
+            _demo_date(8, 17),
+            "GATE-LOT-101-SHIPPING-INSPECTION",
+            _demo_date(5, 15, 30),
+        ),
+        (
+            "LOT-102",
+            "LOT-002",
+            _demo_date(9, 17),
+            "GATE-LOT-102-SHIPPING-INSPECTION",
+            _demo_date(6, 11),
+        ),
+    )
+    for lot_id, lot_code, due_at, gate_id, gate_start in lot_specs:
+        lot = session.get(LotRow, lot_id)
+        gate = session.get(InspectionGateRow, gate_id)
+        if lot is None or gate is None:
+            raise RuntimeError(f"demo fixture references missing LOT/Gate: {lot_id}")
+        lot.lot_code = lot_code
+        lot.due_at = due_at
+        gate.planned_at = gate_start
+
+    unit_codes = (
+        ("LOT-101-U01", "U001"),
+        ("LOT-101-U02", "U002"),
+        ("LOT-101-U03", "U003"),
+        ("LOT-101-U04", "U004"),
+        ("LOT-102-U01", "U005"),
+        ("LOT-102-U02", "U006"),
+        ("LOT-102-U03", "U007"),
+        ("LOT-102-U04", "U008"),
+    )
+    for unit_id, unit_code in unit_codes:
+        unit = session.get(UnitRow, unit_id)
+        if unit is None:
+            raise RuntimeError(f"demo fixture references missing Unit: {unit_id}")
+        unit.unit_code = unit_code
+
+    session.commit()
 
 
 def seed_demo_baseline_plan(session: Session) -> None:
@@ -96,6 +165,7 @@ def initialize_demo_database(
 
     try:
         seed_f02_fixture(session)
+        apply_demo_fixture_overrides(session)
         for lot_id in DEMO_LOT_IDS:
             materialize_lot_execution(session=session, lot_id=lot_id)
         seed_demo_baseline_plan(session)
