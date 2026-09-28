@@ -17,6 +17,12 @@ def parse_api_datetime(value: object) -> datetime | None:
     return parsed
 
 
+def _needs_operator_input(row: Mapping[str, Any]) -> bool:
+    if row.get("state") != "COMPLETED":
+        return True
+    return row.get("process_code") == "FINAL_TEST" and not row.get("result")
+
+
 def current_operation_for_unit(
     operations: Sequence[Mapping[str, Any]],
     *,
@@ -28,7 +34,7 @@ def current_operation_for_unit(
         for row in operations
         if row.get("lot_id") == lot_id
         and row.get("unit_id") == unit_id
-        and row.get("state") != "COMPLETED"
+        and _needs_operator_input(row)
     ]
     if not candidates:
         return None
