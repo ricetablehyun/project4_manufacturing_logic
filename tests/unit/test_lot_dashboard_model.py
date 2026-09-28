@@ -5,6 +5,7 @@ import pytest
 
 from production_control.ui.lot_dashboard_model import (
     build_lot_progress,
+    build_process_execution_detail_rows,
     build_process_status_rows,
     build_process_unit_rows,
     build_unit_detail_rows,
@@ -210,6 +211,82 @@ def test_build_process_status_rows_keeps_forecast_at_process_resolution() -> Non
     assert rows[1]["forecast_end"] == "2026-10-05T12:30:00+09:00"
     assert rows[1]["completed_units"] == ("U001",)
     assert rows[1]["running_units"] == ("U002",)
+
+
+def test_build_process_status_rows_joins_approved_lot_process_plan() -> None:
+    operations = [
+        operation(
+            unit_id="U01",
+            unit_code="U001",
+            seq_no=4,
+            process_code="TUNING",
+            state="RUNNING",
+        )
+    ]
+    forecasts = [
+        {
+            "lot_id": "LOT-101",
+            "process_code": "TUNING",
+            "forecast_end": "2026-10-20T12:00:00+09:00",
+        }
+    ]
+    plan_tasks = [
+        {
+            "lot_id": "LOT-101",
+            "process_code": "TUNING",
+            "target_start": "2026-10-06T09:00:00+09:00",
+            "target_end": "2026-10-19T17:00:00+09:00",
+        }
+    ]
+
+    rows = build_process_status_rows(
+        operations,
+        forecasts,
+        lot_id="LOT-101",
+        plan_tasks=plan_tasks,
+    )
+
+    assert rows[0]["plan_start"] == "2026-10-06T09:00:00+09:00"
+    assert rows[0]["plan_end"] == "2026-10-19T17:00:00+09:00"
+    assert rows[0]["forecast_end"] == "2026-10-20T12:00:00+09:00"
+
+
+def test_build_process_execution_detail_rows_returns_selected_process_only() -> None:
+    operations = [
+        operation(
+            unit_id="U02",
+            unit_code="U002",
+            seq_no=4,
+            process_code="TUNING",
+            state="WAITING",
+        ),
+        operation(
+            unit_id="U01",
+            unit_code="U001",
+            seq_no=4,
+            process_code="TUNING",
+            state="RUNNING",
+            active_minutes=12.5,
+        ),
+        operation(
+            unit_id="U01",
+            unit_code="U001",
+            seq_no=1,
+            process_code="TAPING",
+            state="COMPLETED",
+        ),
+    ]
+
+    rows = build_process_execution_detail_rows(
+        operations,
+        lot_id="LOT-101",
+        process_code="TUNING",
+    )
+
+    assert [row["unit_code"] for row in rows] == ["U001", "U002"]
+    assert rows[0]["state"] == "RUNNING"
+    assert rows[0]["active_minutes"] == 12.5
+    assert rows[1]["state"] == "WAITING"
 
 
 def test_build_unit_detail_rows_uses_earliest_unfinished_process() -> None:
