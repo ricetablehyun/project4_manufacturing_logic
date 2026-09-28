@@ -11,7 +11,14 @@ from typing import Final
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from production_control.persistence.models import InspectionGateRow, LotRow
+from production_control.persistence.models import (
+    InspectionGateRow,
+    LotRow,
+    UnitOperationRow,
+    UnitRow,
+    WorkAttemptRow,
+    WorkEventRow,
+)
 
 _UNSET: Final = object()
 
@@ -19,9 +26,37 @@ _UNSET: Final = object()
 def list_lots(*, session: Session) -> tuple[LotRow, ...]:
     """Return LOT rows in stable identifier order."""
 
-    return tuple(
-        session.scalars(select(LotRow).order_by(LotRow.lot_id)).all()
+    return tuple(session.scalars(select(LotRow).order_by(LotRow.lot_id)).all())
+
+
+def _lot_has_work_event(*, session: Session, lot_id: str) -> bool:
+    event_id = session.scalar(
+        select(WorkEventRow.event_id)
+        .join(WorkAttemptRow, WorkEventRow.attempt_id == WorkAttemptRow.attempt_id)
+        .join(
+            UnitOperationRow,
+            WorkAttemptRow.unit_operation_id == UnitOperationRow.unit_operation_id,
+        )
+        .join(UnitRow, UnitOperationRow.unit_id == UnitRow.unit_id)
+        .where(UnitRow.lot_id == lot_id)
+        .limit(1)
     )
+    return event_id is not None
+
+
+def _sync_lot_operation_eligibility(
+    *,
+    session: Session,
+    lot_id: str,
+    release_at: datetime,
+) -> None:
+    operations = session.scalars(
+        select(UnitOperationRow)
+        .join(UnitRow, UnitOperationRow.unit_id == UnitRow.unit_id)
+        .where(UnitRow.lot_id == lot_id)
+    ).all()
+    for operation in operations:
+        operation.eligible_at = release_at
 
 
 def update_lot(
@@ -39,7 +74,17 @@ def update_lot(
         raise LookupError(f"unknown lot_id: {lot_id}")
 
     if release_at is not _UNSET:
+        if _lot_has_work_event(session=session, lot_id=lot_id):
+            raise ValueError(
+                "release_at cannot be changed after WorkEvent exists for lot_id: "
+                f"{lot_id}"
+            )
         row.release_at = release_at  # type: ignore[assignment]
+        _sync_lot_operation_eligibility(
+            session=session,
+            lot_id=lot_id,
+            release_at=release_at,  # type: ignore[arg-type]
+        )
     if due_at is not _UNSET:
         row.due_at = due_at  # type: ignore[assignment]
     if status is not _UNSET:
