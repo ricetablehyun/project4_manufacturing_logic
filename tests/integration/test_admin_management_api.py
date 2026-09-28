@@ -3,6 +3,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from production_control.api.app import create_app
 from production_control.persistence.database import (
@@ -11,7 +12,13 @@ from production_control.persistence.database import (
     create_sqlite_engine,
 )
 from production_control.persistence.fixture_seed import seed_f02_fixture
-from production_control.persistence.models import InspectionGateRow, LotRow
+from production_control.persistence.materialization import materialize_lot_execution
+from production_control.persistence.models import (
+    InspectionGateRow,
+    LotRow,
+    UnitOperationRow,
+    UnitRow,
+)
 
 SEOUL = ZoneInfo("Asia/Seoul")
 
@@ -28,6 +35,25 @@ def seeded_client(tmp_path: Path) -> tuple[TestClient, object]:
     seed_f02_fixture(session)
     session.close()
     return TestClient(create_app(session_factory=session_factory)), session_factory
+
+
+def materialize_lot(session_factory: object, lot_id: str) -> None:
+    session = session_factory()  # type: ignore[operator]
+    try:
+        materialize_lot_execution(session=session, lot_id=lot_id)
+    finally:
+        session.close()
+
+
+def lot_operations(session: object, lot_id: str) -> list[UnitOperationRow]:
+    return list(
+        session.scalars(  # type: ignore[attr-defined]
+            select(UnitOperationRow)
+            .join(UnitRow, UnitOperationRow.unit_id == UnitRow.unit_id)
+            .where(UnitRow.lot_id == lot_id)
+            .order_by(UnitOperationRow.unit_operation_id)
+        ).all()
+    )
 
 
 def test_get_lots_returns_stable_admin_snapshot(tmp_path: Path) -> None:
@@ -72,6 +98,73 @@ def test_patch_lot_updates_only_allowed_fields(tmp_path: Path) -> None:
         assert row.status == "HOLD"
         assert row.product_id == "PRODUCT-RF-MOCK-A"
         assert row.quantity == 4
+    finally:
+        session.close()
+
+
+def test_patch_lot_release_syncs_materialized_operation_eligibility(tmp_path: Path) -> None:
+    client, session_factory = seeded_client(tmp_path)
+    materialize_lot(session_factory, "LOT-101")
+
+    response = client.patch(
+        "/lots/LOT-101",
+        json={"release_at": dt(5, 10).isoformat()},
+    )
+
+    assert response.status_code == 200
+    assert datetime.fromisoformat(response.json()["release_at"]) == dt(5, 10)
+
+    session = session_factory()
+    try:
+        operations = lot_operations(session, "LOT-101")
+        assert operations
+        assert all(operation.eligible_at == dt(5, 10) for operation in operations)
+    finally:
+        session.close()
+
+
+def test_patch_lot_release_rejects_after_work_event_without_partial_update(
+    tmp_path: Path,
+) -> None:
+    client, session_factory = seeded_client(tmp_path)
+    materialize_lot(session_factory, "LOT-101")
+
+    event_response = client.post(
+        "/work-events",
+        json={
+            "event_id": "E-LOT-101-START",
+            "unit_operation_id": "OP::LOT-101-U01::STEP-01-TAPING",
+            "event_type": "START",
+            "occurred_at": dt(5, 9, 5).isoformat(),
+            "station_code": "ASSEMBLY",
+            "worker_code": "WORKER-A",
+            "reason": None,
+        },
+    )
+    assert event_response.status_code == 201
+
+    response = client.patch(
+        "/lots/LOT-101",
+        json={
+            "release_at": dt(5, 10).isoformat(),
+            "due_at": dt(7, 14).isoformat(),
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "release_at cannot be changed after WorkEvent exists for lot_id: LOT-101"
+    )
+
+    session = session_factory()
+    try:
+        row = session.get(LotRow, "LOT-101")
+        assert row is not None
+        assert row.release_at == dt(5, 9)
+        assert row.due_at == dt(6, 12)
+        operations = lot_operations(session, "LOT-101")
+        assert operations
+        assert all(operation.eligible_at == dt(5, 9) for operation in operations)
     finally:
         session.close()
 
