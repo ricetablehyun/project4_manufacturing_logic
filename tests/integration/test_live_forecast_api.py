@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
@@ -29,8 +30,8 @@ def dt(hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 10, 5, hour, minute, tzinfo=SEOUL)
 
 
-def seeded_client() -> TestClient:
-    engine = create_sqlite_engine()
+def seeded_client(tmp_path: Path) -> TestClient:
+    engine = create_sqlite_engine(tmp_path / "live_forecast_api.db")
     create_schema(engine)
     session_factory = create_session_factory(engine)
     session = session_factory()
@@ -94,8 +95,10 @@ def process_forecast(payload: dict, *, lot_id: str, process_code: str) -> dict:
     )
 
 
-def test_get_forecast_uses_current_approved_plan_and_explicit_as_of() -> None:
-    client = seeded_client()
+def test_get_forecast_uses_current_approved_plan_and_explicit_as_of(
+    tmp_path: Path,
+) -> None:
+    client = seeded_client(tmp_path)
 
     response = client.get(
         "/forecast",
@@ -118,8 +121,10 @@ def test_get_forecast_uses_current_approved_plan_and_explicit_as_of() -> None:
     assert payload["waiting_operation_ids"] == []
 
 
-def test_work_event_changes_live_forecast_at_same_reference_time() -> None:
-    client = seeded_client()
+def test_work_event_changes_live_forecast_at_same_reference_time(
+    tmp_path: Path,
+) -> None:
+    client = seeded_client(tmp_path)
     params = {"as_of": dt(9, 5).isoformat()}
 
     before = client.get("/forecast", params=params)
@@ -156,8 +161,10 @@ def test_work_event_changes_live_forecast_at_same_reference_time() -> None:
     assert after_taping["forecast_end"] != before_taping["forecast_end"]
 
 
-def test_running_over_pace_without_remaining_estimate_returns_wait() -> None:
-    client = seeded_client()
+def test_running_over_pace_without_remaining_estimate_returns_wait(
+    tmp_path: Path,
+) -> None:
+    client = seeded_client(tmp_path)
     accepted = client.post(
         "/work-events",
         json={
@@ -188,8 +195,8 @@ def test_running_over_pace_without_remaining_estimate_returns_wait() -> None:
     ]
 
 
-def test_forecast_rejects_timezone_naive_as_of() -> None:
-    client = seeded_client()
+def test_forecast_rejects_timezone_naive_as_of(tmp_path: Path) -> None:
+    client = seeded_client(tmp_path)
 
     response = client.get(
         "/forecast",
