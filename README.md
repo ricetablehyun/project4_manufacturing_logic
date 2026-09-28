@@ -49,7 +49,7 @@ python -m pip install -e ".[dev]"
 
 ### 1. Demo DB 초기화
 
-기본 경로는 `data/demo.db`입니다. 기존 DB가 있으면 `--reset` 없이는 덮어쓰지 않습니다.
+기본 경로는 `data/demo.db`입니다. 기존 DB가 있으면 `--reset` 없이는 덮어쓰지 않습니다. `--reset`은 DB 파일을 교체하므로 FastAPI 프로세스를 종료한 상태에서 실행합니다.
 
 ```bash
 python -m production_control.demo.init_db --reset
@@ -89,4 +89,4 @@ export PRODUCTION_CONTROL_API_URL=http://127.0.0.1:8000
 python -m streamlit run src/production_control/ui/overview.py
 ```
 
-Demo DB는 로컬 파일로 유지되므로 WorkEvent 입력이나 Replan 승인 결과가 서버 실행 중/재시작 후에도 남습니다. 초기 Fixture 상태로 되돌릴 때만 init 명령의 `--reset`을 다시 실행합니다.
+Demo DB는 로컬 파일로 유지되므로 WorkEvent 입력이나 Replan 승인 결과가 서버 실행 중/재시작 후에도 남습니다. 초기 Fixture 상태로 되돌릴 때만 FastAPI를 종료하고 init 명령의 `--reset`을 다시 실행합니다.
