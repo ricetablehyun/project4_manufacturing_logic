@@ -81,6 +81,54 @@ def build_lot_progress(
     )
 
 
+def build_process_unit_rows(
+    operations: Sequence[Mapping[str, Any]],
+    *,
+    lot_id: str,
+) -> tuple[dict[str, Any], ...]:
+    """Group one LOT's UnitOperations by process and execution state."""
+
+    lot_operations = [row for row in operations if row.get("lot_id") == lot_id]
+    rows: list[dict[str, Any]] = []
+
+    for process_code in PROCESS_ORDER:
+        process_operations = [
+            row for row in lot_operations if str(row.get("process_code")) == process_code
+        ]
+        if not process_operations:
+            continue
+
+        units_by_state: dict[str, list[str]] = {
+            "COMPLETED": [],
+            "RUNNING": [],
+            "HOLD": [],
+            "WAITING": [],
+        }
+        for operation in process_operations:
+            state = str(operation.get("state", "UNKNOWN"))
+            if state not in units_by_state:
+                continue
+            unit_code = str(operation.get("unit_code") or operation.get("unit_id") or "—")
+            units_by_state[state].append(unit_code)
+
+        for unit_codes in units_by_state.values():
+            unit_codes.sort()
+
+        rows.append(
+            {
+                "process_code": process_code,
+                "completed": len(units_by_state["COMPLETED"]),
+                "total": len(process_operations),
+                "completed_units": tuple(units_by_state["COMPLETED"]),
+                "running_units": tuple(units_by_state["RUNNING"]),
+                "hold_units": tuple(units_by_state["HOLD"]),
+                "waiting_units": tuple(units_by_state["WAITING"]),
+            }
+        )
+
+    return tuple(rows)
+
+
 def build_unit_detail_rows(
     operations: Sequence[Mapping[str, Any]],
     *,
