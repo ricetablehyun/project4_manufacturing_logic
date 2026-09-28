@@ -93,6 +93,12 @@ class ProductionControlApiClient:
             raise ApiClientError("/forecast returned an unexpected payload")
         return payload
 
+    def get_current_plan(self) -> dict[str, Any]:
+        payload = self._get_json("/schedule-plan/current")
+        if not isinstance(payload, dict):
+            raise ApiClientError("/schedule-plan/current returned an unexpected payload")
+        return payload
+
     def list_lots(self) -> list[dict[str, Any]]:
         payload = self._get_json("/lots")
         if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
