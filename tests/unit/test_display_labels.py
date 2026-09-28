@@ -32,6 +32,7 @@ def test_gate_and_process_labels_use_korean_terms() -> None:
     assert process_label("FINAL_TEST") == "최종 성능시험"
 
 
-def test_display_datetime_removes_iso_offset_noise() -> None:
+def test_display_datetime_uses_compact_seoul_time() -> None:
     assert display_datetime("2026-10-05T13:00+09:00") == "2026-10-05 13:00"
+    assert display_datetime("2026-09-28T02:30+00:00") == "2026-09-28 11:30"
     assert display_datetime("—") == "—"
