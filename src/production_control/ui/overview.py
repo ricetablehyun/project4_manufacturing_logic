@@ -21,7 +21,7 @@ from production_control.ui.display_labels import (
 )
 from production_control.ui.lot_dashboard_model import (
     build_lot_progress,
-    build_process_unit_rows,
+    build_process_status_rows,
     format_duration_minutes,
     minimum_gate_slack,
     shipping_inspection_expected_finish,
@@ -66,57 +66,55 @@ def _inspection_finish_text(row: dict[str, object]) -> str:
     return display_datetime(shipping_inspection_expected_finish(planned_start))
 
 
+def _process_forecast_text(row: dict[str, object]) -> str:
+    if bool(row.get("process_complete")):
+        return "완료"
+    forecast_end = row.get("forecast_end")
+    if forecast_end in (None, "", "—"):
+        return "계산 대기"
+    return display_datetime(forecast_end)
+
+
 def _render_lot_detail(
     *,
     lot_id: str,
     view: object,
     operations: list[dict[str, object]],
 ) -> None:
-    process_unit_rows = [
+    process_rows = [
         {
             "process_code": process_label(row["process_code"]),
             "progress": f"{row['completed']}/{row['total']}",
+            "forecast_end": _process_forecast_text(row),
             "completed_units": _unit_codes_text(row["completed_units"]),
             "running_units": _unit_codes_text(row["running_units"]),
             "hold_units": _unit_codes_text(row["hold_units"]),
             "waiting_units": _unit_codes_text(row["waiting_units"]),
         }
-        for row in build_process_unit_rows(operations, lot_id=lot_id)
+        for row in build_process_status_rows(
+            operations,
+            view.process_rows,
+            lot_id=lot_id,
+        )
     ]
 
-    st.markdown("**공정별 Unit 현황**")
-    st.dataframe(
-        process_unit_rows,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "process_code": "공정",
-            "progress": "완료",
-            "completed_units": "완료 Unit",
-            "running_units": "작업 중 Unit",
-            "hold_units": "보류 Unit",
-            "waiting_units": "대기 Unit",
-        },
+    st.markdown("**공정별 진행 및 예상완료**")
+    st.caption(
+        "Forecast는 LOT×공정의 전체 예상완료를 표시하고, "
+        "Unit은 해당 공정 안의 실행상태만 보여줍니다."
     )
-
-    process_rows = [
-        {
-            "process_code": process_label(row["process_code"]),
-            "forecast_start": display_datetime(row["forecast_start"]),
-            "forecast_end": display_datetime(row["forecast_end"]),
-        }
-        for row in view.process_rows
-        if row["lot_id"] == lot_id
-    ]
-    st.markdown("**공정 예상 일정**")
     st.dataframe(
         process_rows,
         use_container_width=True,
         hide_index=True,
         column_config={
             "process_code": "공정",
-            "forecast_start": "예상 시작",
-            "forecast_end": "예상 종료",
+            "progress": "진척",
+            "forecast_end": "공정 예상완료",
+            "completed_units": "완료 Unit",
+            "running_units": "작업 중 Unit",
+            "hold_units": "보류 Unit",
+            "waiting_units": "대기 Unit",
         },
     )
 
