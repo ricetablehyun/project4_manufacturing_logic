@@ -1,9 +1,18 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import pytest
+
 from production_control.ui.lot_dashboard_model import (
     build_lot_progress,
     build_process_unit_rows,
     build_unit_detail_rows,
+    format_duration_minutes,
     minimum_gate_slack,
+    shipping_inspection_expected_finish,
 )
+
+SEOUL = ZoneInfo("Asia/Seoul")
 
 
 def operation(
@@ -207,3 +216,26 @@ def test_minimum_gate_slack_returns_tightest_lot_gate() -> None:
 
     assert minimum_gate_slack(gates, lot_id="LOT-101") == 45.5
     assert minimum_gate_slack(gates, lot_id="LOT-999") is None
+
+
+def test_shipping_inspection_expected_finish_counts_start_day_and_skips_weekend() -> None:
+    monday_start = datetime(2026, 10, 5, 15, 30, tzinfo=SEOUL)
+    friday_start = datetime(2026, 10, 9, 10, 0, tzinfo=SEOUL)
+
+    monday_finish = shipping_inspection_expected_finish(monday_start)
+    friday_finish = shipping_inspection_expected_finish(friday_start)
+
+    assert monday_finish == datetime(2026, 10, 7, 17, 0, tzinfo=SEOUL)
+    assert friday_finish == datetime(2026, 10, 13, 17, 0, tzinfo=SEOUL)
+
+
+def test_shipping_inspection_expected_finish_rejects_naive_datetime() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        shipping_inspection_expected_finish(datetime(2026, 10, 5, 15, 30))
+
+
+def test_format_duration_minutes_is_human_readable() -> None:
+    assert format_duration_minutes(172) == "2시간 52분"
+    assert format_duration_minutes(1170) == "19시간 30분"
+    assert format_duration_minutes(-30) == "-30분"
+    assert format_duration_minutes(None) == "—"
