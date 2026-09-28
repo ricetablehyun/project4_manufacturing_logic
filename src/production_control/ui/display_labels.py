@@ -4,6 +4,9 @@ Backend/API values stay unchanged; this module only translates presentation text
 """
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+SEOUL = ZoneInfo("Asia/Seoul")
 
 _READINESS_LABELS = {
     "READY": "계산 완료",
@@ -72,7 +75,7 @@ def process_label(value: object) -> str:
 
 
 def display_datetime(value: object) -> str:
-    """Render an ISO datetime compactly for a Korean local-dashboard table."""
+    """Render a timestamp compactly in Asia/Seoul for the administrator UI."""
 
     if value in (None, "", "—"):
         return "—"
@@ -85,4 +88,7 @@ def display_datetime(value: object) -> str:
             return value
     else:
         return str(value)
+
+    if parsed.tzinfo is not None and parsed.utcoffset() is not None:
+        parsed = parsed.astimezone(SEOUL)
     return parsed.strftime("%Y-%m-%d %H:%M")
