@@ -74,6 +74,24 @@ class LiveForecastResponse(BaseModel):
     waiting_operation_ids: list[str]
 
 
+class CurrentPlanTaskResponse(BaseModel):
+    lot_id: str
+    routing_step_id: str
+    process_code: str
+    seq_no: int
+    target_start: datetime
+    target_end: datetime
+    target_qty: int
+    priority_rank: int
+
+
+class CurrentPlanResponse(BaseModel):
+    plan_id: str
+    version: int
+    priority_rule: str
+    tasks: list[CurrentPlanTaskResponse]
+
+
 class CandidateKPIResponse(BaseModel):
     late_lot_count: int
     total_tardiness_minutes: float
