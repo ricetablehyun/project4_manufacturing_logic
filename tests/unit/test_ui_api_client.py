@@ -40,7 +40,9 @@ def test_ui_client_uses_expected_read_endpoints_and_as_of_query():
 
 
 def test_ui_client_rejects_unexpected_collection_payload():
-    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"not": "a list"}))
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"not": "a list"})
+    )
 
     with ProductionControlApiClient(base_url="http://api.test", transport=transport) as client:
         with pytest.raises(ApiClientError, match="/lots returned an unexpected payload"):
