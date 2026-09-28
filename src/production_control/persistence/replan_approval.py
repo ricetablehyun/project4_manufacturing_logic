@@ -110,7 +110,7 @@ def approve_replan_candidate(
         plan_id=plan_id,
         parent_plan_id=parent_plan_id,
         priority_rule=selected.rule,
-        trigger_reason="URGENT_GATE_RISK",
+        trigger_reason=snapshot.risk_level.name,
         approved_at=approved_at,
         selected_kpi=selected.kpi,
         tasks=drafts,
