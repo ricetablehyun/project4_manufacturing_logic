@@ -41,7 +41,7 @@ def test_demo_bootstrap_serves_fixture_through_real_api_boundary(tmp_path: Path)
     }
 
 
-def test_demo_uses_shop_floor_codes_and_quality_inspection_schedule(tmp_path: Path) -> None:
+def test_demo_uses_shop_floor_codes_and_realistic_lot_scale(tmp_path: Path) -> None:
     database_path = initialize_demo_database(tmp_path / "demo.db")
     client = TestClient(create_demo_app(database_path))
 
@@ -56,24 +56,51 @@ def test_demo_uses_shop_floor_codes_and_quality_inspection_schedule(tmp_path: Pa
     lots_by_id = {row["lot_id"]: row for row in lots.json()}
     assert lots_by_id["LOT-101"]["lot_code"] == "LOT-001"
     assert lots_by_id["LOT-102"]["lot_code"] == "LOT-002"
-    assert lots_by_id["LOT-101"]["due_at"].startswith("2026-10-08T17:00")
-    assert lots_by_id["LOT-102"]["due_at"].startswith("2026-10-09T17:00")
+    assert lots_by_id["LOT-101"]["quantity"] == 30
+    assert lots_by_id["LOT-102"]["quantity"] == 30
+    assert lots_by_id["LOT-101"]["release_at"].startswith("2026-09-28T09:00")
+    assert lots_by_id["LOT-102"]["release_at"].startswith("2026-10-05T09:00")
+    assert lots_by_id["LOT-101"]["due_at"].startswith("2026-10-29T17:00")
+    assert lots_by_id["LOT-102"]["due_at"].startswith("2026-11-12T17:00")
 
     unit_codes = sorted({row["unit_code"] for row in operations.json()})
-    assert unit_codes == [
-        "U001",
-        "U002",
-        "U003",
-        "U004",
-        "U005",
-        "U006",
-        "U007",
-        "U008",
-    ]
+    assert len(unit_codes) == 60
+    assert unit_codes[0] == "U001"
+    assert unit_codes[29] == "U030"
+    assert unit_codes[30] == "U031"
+    assert unit_codes[-1] == "U060"
 
     gates_by_lot = {row["lot_id"]: row for row in gates.json()}
-    assert gates_by_lot["LOT-101"]["planned_at"].startswith("2026-10-05T15:30")
-    assert gates_by_lot["LOT-102"]["planned_at"].startswith("2026-10-06T11:00")
+    assert gates_by_lot["LOT-101"]["planned_at"].startswith("2026-10-23T09:00")
+    assert gates_by_lot["LOT-102"]["planned_at"].startswith("2026-11-06T09:00")
+
+
+def test_demo_current_plan_is_lot_process_scale_not_unit_schedule(tmp_path: Path) -> None:
+    database_path = initialize_demo_database(tmp_path / "demo.db")
+    client = TestClient(create_demo_app(database_path))
+
+    response = client.get("/schedule-plan/current")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["plan_id"] == DEMO_PLAN_ID
+    assert payload["version"] == 1
+    assert len(payload["tasks"]) == 10
+    assert {task["target_qty"] for task in payload["tasks"]} == {30}
+
+    tasks = {
+        (task["lot_id"], task["process_code"]): task
+        for task in payload["tasks"]
+    }
+    lot_001_taping = tasks[("LOT-101", "TAPING")]
+    lot_001_tuning = tasks[("LOT-101", "TUNING")]
+    lot_002_tuning = tasks[("LOT-102", "TUNING")]
+
+    assert lot_001_taping["target_start"].startswith("2026-09-28T09:00")
+    assert lot_001_taping["target_end"].startswith("2026-09-29T13:00")
+    assert lot_001_tuning["target_end"].startswith("2026-10-19T17:00")
+    assert lot_002_tuning["target_start"].startswith("2026-10-20T09:00")
+    assert lot_002_tuning["target_end"].startswith("2026-11-02T17:00")
 
 
 def test_demo_bootstrap_requires_explicit_reset_to_replace_existing_db(
@@ -101,6 +128,7 @@ def test_demo_reset_restores_deterministic_initial_state(tmp_path: Path) -> None
     assert lots.status_code == 200
     lot_101 = next(row for row in lots.json() if row["lot_id"] == "LOT-101")
     assert lot_101["status"] == "ACTIVE"
+    assert lot_101["quantity"] == 30
 
 
 def test_demo_runtime_rejects_missing_uninitialized_database(tmp_path: Path) -> None:
