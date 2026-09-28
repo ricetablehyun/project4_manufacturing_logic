@@ -42,15 +42,17 @@ FCFS / EDD / Slack / CR replanning candidates
 D061 Overview는 기존 FastAPI HTTP 경계만 사용하며 SQLite/SQLAlchemy에 직접 접근하지 않습니다.
 
 ```bash
-pip install -e ".[dev]"
-streamlit run src/production_control/ui/overview.py
+python -m pip install -e ".[dev]"
+python -m streamlit run src/production_control/ui/overview.py
 ```
+
+`python -m streamlit`을 사용하면 활성화된 가상환경의 Python으로 Streamlit을 실행하므로, Conda의 전역 `streamlit` 실행기가 먼저 잡히는 환경 충돌을 피할 수 있습니다.
 
 기본 FastAPI 주소는 `http://127.0.0.1:8000`이며 환경변수로 변경할 수 있습니다.
 
 ```bash
 export PRODUCTION_CONTROL_API_URL=http://127.0.0.1:8000
-streamlit run src/production_control/ui/overview.py
+python -m streamlit run src/production_control/ui/overview.py
 ```
 
 현재 저장소에는 실행용 FastAPI runtime entrypoint가 아직 없으므로, API 서버가 실행 중이지 않으면 Overview는 연결 오류 상태를 표시하는 것이 정상입니다. 로컬/demo API runtime 구성은 D062에서 별도로 결정합니다.
