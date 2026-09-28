@@ -7,6 +7,7 @@ LOT_LEAD_TIME barriers outside this adapter.
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -30,6 +31,9 @@ from production_control.persistence.models import (
     UnitRow,
     WorkAttemptRow,
 )
+from production_control.persistence.pace_snapshot import (
+    effective_attempt_active_minutes,
+)
 from production_control.persistence.rework_scheduler_adapter import (
     build_waiting_rework_schedule_inputs,
     load_routing_step_requirements,
@@ -52,6 +56,7 @@ def _normal_input_from_projection(
     lot: LotRow,
     unit: UnitRow,
     projection: UnitExecutionProjection,
+    as_of: datetime | None,
 ) -> tuple[UnitPaceSchedulingInput, ...]:
     inputs: list[UnitPaceSchedulingInput] = []
 
@@ -88,6 +93,15 @@ def _normal_input_from_projection(
                 f"UNIT_TIME step is missing standard_minutes: {step.routing_step_id}"
             )
 
+        active_minutes = float(attempt.active_minutes)
+        if as_of is not None:
+            active_minutes = effective_attempt_active_minutes(
+                session=session,
+                attempt=attempt,
+                operation_state=projected.operation_state,
+                as_of=as_of,
+            )
+
         inputs.append(
             UnitPaceSchedulingInput(
                 operation_id=attempt.attempt_id,
@@ -103,7 +117,7 @@ def _normal_input_from_projection(
                     routing_step_id=step.routing_step_id,
                 ),
                 release_buffer_k=step.release_buffer_k,
-                active_minutes=attempt.active_minutes,
+                active_minutes=active_minutes,
                 hold_remaining_minutes=operation.hold_remaining_minutes,
                 standard_minutes_per_unit=step.standard_minutes,
                 execution_seq=projected.execution_seq,
@@ -130,12 +144,15 @@ def build_internal_lot_forecast_inputs(
     session: Session,
     lot_id: str,
     pace_by_process: Mapping[str, PaceForecast],
+    as_of: datetime | None = None,
 ) -> PersistedForecastInputBundle:
     """Build all current internal scheduler inputs for one persisted LOT.
 
     Normal work is adapted in LOT x process groups so the existing rolling Pace
     workload distribution is preserved. Rework/retest Attempts are added as
     distinct scheduler operations using D048 execution order and D049 duration.
+    When ``as_of`` is supplied, an open RUNNING segment contributes elapsed
+    active time through that reference timestamp.
     """
 
     lot = session.get(LotRow, lot_id)
@@ -165,6 +182,7 @@ def build_internal_lot_forecast_inputs(
                 lot=lot,
                 unit=unit,
                 projection=projection,
+                as_of=as_of,
             )
         )
 
