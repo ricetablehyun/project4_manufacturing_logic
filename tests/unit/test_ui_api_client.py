@@ -44,9 +44,11 @@ def test_ui_client_rejects_unexpected_collection_payload():
         lambda request: httpx.Response(200, json={"not": "a list"})
     )
 
-    with ProductionControlApiClient(base_url="http://api.test", transport=transport) as client:
-        with pytest.raises(ApiClientError, match="/lots returned an unexpected payload"):
-            client.list_lots()
+    with (
+        ProductionControlApiClient(base_url="http://api.test", transport=transport) as client,
+        pytest.raises(ApiClientError, match="/lots returned an unexpected payload"),
+    ):
+        client.list_lots()
 
 
 def test_ui_client_surfaces_api_error_detail_and_status_code():
@@ -54,8 +56,10 @@ def test_ui_client_surfaces_api_error_detail_and_status_code():
         lambda request: httpx.Response(409, json={"detail": "forecast snapshot is stale"})
     )
 
-    with ProductionControlApiClient(base_url="http://api.test", transport=transport) as client:
-        with pytest.raises(ApiClientError, match="forecast snapshot is stale") as caught:
-            client.get_forecast()
+    with (
+        ProductionControlApiClient(base_url="http://api.test", transport=transport) as client,
+        pytest.raises(ApiClientError, match="forecast snapshot is stale") as caught,
+    ):
+        client.get_forecast()
 
     assert caught.value.status_code == 409
