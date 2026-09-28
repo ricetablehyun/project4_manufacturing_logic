@@ -11,8 +11,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from production_control.api.models import (
     CandidateKPIResponse,
     GateForecastResponse,
+    InspectionGateAdminResponse,
+    InspectionGateUpdateRequest,
     LiveForecastResponse,
+    LotAdminResponse,
     LotForecastResponse,
+    LotUpdateRequest,
     ProcessForecastResponse,
     ReplanApprovalRequest,
     ReplanApprovalResponse,
@@ -23,6 +27,12 @@ from production_control.api.models import (
     WorkEventResponse,
 )
 from production_control.core.execution_state import WorkEventInput
+from production_control.persistence.admin_management import (
+    list_inspection_gates,
+    list_lots,
+    update_inspection_gate,
+    update_lot,
+)
 from production_control.persistence.execution_service import persist_work_event
 from production_control.persistence.live_forecast import (
     LiveForecastConfig,
@@ -116,6 +126,121 @@ def create_app(
             attempt_no=snapshot.attempt_no,
             active_minutes=snapshot.active_minutes,
             result=snapshot.result.value if snapshot.result is not None else None,
+        )
+
+    @app.get("/lots", response_model=list[LotAdminResponse])
+    def get_lots(
+        session: Annotated[Session, Depends(get_session)],
+    ) -> list[LotAdminResponse]:
+        return [
+            LotAdminResponse(
+                lot_id=row.lot_id,
+                product_id=row.product_id,
+                lot_code=row.lot_code,
+                quantity=row.quantity,
+                release_at=row.release_at,
+                due_at=row.due_at,
+                status=row.status,
+                created_at=row.created_at,
+            )
+            for row in list_lots(session=session)
+        ]
+
+    @app.patch("/lots/{lot_id}", response_model=LotAdminResponse)
+    def patch_lot(
+        lot_id: str,
+        payload: LotUpdateRequest,
+        session: Annotated[Session, Depends(get_session)],
+    ) -> LotAdminResponse:
+        changes: dict[str, object] = {}
+        if "release_at" in payload.model_fields_set:
+            changes["release_at"] = payload.release_at
+        if "due_at" in payload.model_fields_set:
+            changes["due_at"] = payload.due_at
+        if "status" in payload.model_fields_set:
+            changes["status"] = payload.status
+
+        try:
+            row = update_lot(session=session, lot_id=lot_id, **changes)
+        except LookupError as exc:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except ValueError as exc:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+
+        return LotAdminResponse(
+            lot_id=row.lot_id,
+            product_id=row.product_id,
+            lot_code=row.lot_code,
+            quantity=row.quantity,
+            release_at=row.release_at,
+            due_at=row.due_at,
+            status=row.status,
+            created_at=row.created_at,
+        )
+
+    @app.get(
+        "/inspection-gates",
+        response_model=list[InspectionGateAdminResponse],
+    )
+    def get_inspection_gates(
+        session: Annotated[Session, Depends(get_session)],
+        lot_id: str | None = None,
+    ) -> list[InspectionGateAdminResponse]:
+        return [
+            InspectionGateAdminResponse(
+                gate_id=row.gate_id,
+                lot_id=row.lot_id,
+                gate_type=row.gate_type,
+                required_after_step_id=row.required_after_step_id,
+                planned_at=row.planned_at,
+                completed_at=row.completed_at,
+                status=row.status,
+            )
+            for row in list_inspection_gates(session=session, lot_id=lot_id)
+        ]
+
+    @app.patch(
+        "/inspection-gates/{gate_id}",
+        response_model=InspectionGateAdminResponse,
+    )
+    def patch_inspection_gate(
+        gate_id: str,
+        payload: InspectionGateUpdateRequest,
+        session: Annotated[Session, Depends(get_session)],
+    ) -> InspectionGateAdminResponse:
+        changes: dict[str, object] = {}
+        if "planned_at" in payload.model_fields_set:
+            changes["planned_at"] = payload.planned_at
+        if "completed_at" in payload.model_fields_set:
+            changes["completed_at"] = payload.completed_at
+        if "status" in payload.model_fields_set:
+            changes["status"] = payload.status
+
+        try:
+            row = update_inspection_gate(session=session, gate_id=gate_id, **changes)
+        except LookupError as exc:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+
+        return InspectionGateAdminResponse(
+            gate_id=row.gate_id,
+            lot_id=row.lot_id,
+            gate_type=row.gate_type,
+            required_after_step_id=row.required_after_step_id,
+            planned_at=row.planned_at,
+            completed_at=row.completed_at,
+            status=row.status,
         )
 
     @app.get("/forecast", response_model=LiveForecastResponse)
