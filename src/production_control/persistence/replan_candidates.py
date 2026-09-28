@@ -26,7 +26,11 @@ from production_control.core.event_scheduler import (
     EventDispatchInput,
     schedule_operations_event_driven,
 )
-from production_control.core.finite_scheduler import OperationSpec, ScheduleResult
+from production_control.core.finite_scheduler import (
+    OperationSpec,
+    ScheduledOperation,
+    ScheduleResult,
+)
 from production_control.core.pace_scheduler_adapter import ForecastReadiness
 from production_control.core.priority_rules import (
     LotPriorityInput,
@@ -218,9 +222,21 @@ def _dynamic_priority_provider(
     def provider(
         decision_time: datetime,
         pending_operations: tuple[OperationSpec, ...],
-        _scheduled_operations,
+        scheduled_operations: tuple[ScheduledOperation, ...],
     ) -> tuple[LotPriorityInput, ...]:
         remaining = _remaining_minutes_by_lot(pending_operations)
+        for operation in scheduled_operations:
+            if operation.end <= decision_time:
+                continue
+            residual_minutes = calendar.working_minutes_between(
+                decision_time,
+                operation.end,
+            )
+            if residual_minutes > 0:
+                remaining[operation.lot_id] = (
+                    remaining.get(operation.lot_id, 0.0) + residual_minutes
+                )
+
         result: list[LotPriorityInput] = []
         for lot_id in lot_order:
             remaining_minutes = remaining.get(lot_id)
