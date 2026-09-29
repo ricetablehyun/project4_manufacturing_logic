@@ -49,6 +49,35 @@ class PersistedForecastInputBundle:
     signals: tuple[UnitPaceSignal, ...]
 
 
+def _started_routing_step_ids(
+    *,
+    session: Session,
+    lot_id: str,
+) -> frozenset[str]:
+    """Return routing steps that have already started for at least one Unit.
+
+    Transfer-buffer release is irreversible within a LOT. A live Forecast built
+    from only unfinished operations must therefore preserve the fact that a
+    downstream step already started before the current snapshot; otherwise the
+    event scheduler would incorrectly wait for K new upstream completions.
+    """
+
+    rows = session.scalars(
+        select(UnitOperationRow.routing_step_id)
+        .join(UnitRow, UnitOperationRow.unit_id == UnitRow.unit_id)
+        .join(
+            WorkAttemptRow,
+            WorkAttemptRow.unit_operation_id == UnitOperationRow.unit_operation_id,
+        )
+        .where(
+            UnitRow.lot_id == lot_id,
+            WorkAttemptRow.started_at.is_not(None),
+        )
+        .distinct()
+    ).all()
+    return frozenset(rows)
+
+
 def _normal_input_from_projection(
     *,
     session: Session,
@@ -56,6 +85,7 @@ def _normal_input_from_projection(
     unit: UnitRow,
     projection: UnitExecutionProjection,
     as_of: datetime | None,
+    started_routing_step_ids: frozenset[str],
 ) -> tuple[UnitPaceSchedulingInput, ...]:
     inputs: list[UnitPaceSchedulingInput] = []
 
@@ -103,6 +133,10 @@ def _normal_input_from_projection(
             eligible_at = max(eligible_at, operation.hold_until)
             release_at = max(release_at, operation.hold_until)
 
+        release_buffer_k = step.release_buffer_k
+        if step.routing_step_id in started_routing_step_ids:
+            release_buffer_k = None
+
         inputs.append(
             UnitPaceSchedulingInput(
                 operation_id=attempt.attempt_id,
@@ -117,7 +151,7 @@ def _normal_input_from_projection(
                     session,
                     routing_step_id=step.routing_step_id,
                 ),
-                release_buffer_k=step.release_buffer_k,
+                release_buffer_k=release_buffer_k,
                 active_minutes=active_minutes,
                 expected_remaining_minutes=operation.expected_remaining_minutes,
                 hold_remaining_minutes=operation.hold_remaining_minutes,
@@ -164,6 +198,7 @@ def build_internal_lot_forecast_inputs(
     if not units:
         raise ValueError(f"LOT has no Units: {lot_id}")
 
+    started_step_ids = _started_routing_step_ids(session=session, lot_id=lot_id)
     projections: list[UnitExecutionProjection] = []
     normal_inputs: list[UnitPaceSchedulingInput] = []
 
@@ -180,6 +215,7 @@ def build_internal_lot_forecast_inputs(
                 unit=unit,
                 projection=projection,
                 as_of=as_of,
+                started_routing_step_ids=started_step_ids,
             )
         )
 
