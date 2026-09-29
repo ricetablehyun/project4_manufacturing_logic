@@ -8,8 +8,15 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from sqlalchemy.orm import Session, sessionmaker
 
+from production_control.api.execution_models import (
+    ExpectedRemainingResponse,
+    ExpectedRemainingUpdateRequest,
+    UnitOperationResponse,
+)
 from production_control.api.models import (
     CandidateKPIResponse,
+    CurrentPlanResponse,
+    CurrentPlanTaskResponse,
     GateForecastResponse,
     InspectionGateAdminResponse,
     InspectionGateUpdateRequest,
@@ -33,11 +40,14 @@ from production_control.persistence.admin_management import (
     update_inspection_gate,
     update_lot,
 )
-from production_control.persistence.execution_service import persist_work_event
-from production_control.persistence.live_forecast import (
-    LiveForecastConfig,
-    build_live_forecast,
+from production_control.persistence.execution_query import list_unit_operations
+from production_control.persistence.execution_service import (
+    persist_work_event,
+    update_expected_remaining_minutes,
 )
+from production_control.persistence.live_forecast import LiveForecastConfig, build_live_forecast
+from production_control.persistence.models import WorkAttemptRow
+from production_control.persistence.plan_query import load_current_plan_snapshot
 from production_control.persistence.replan_approval import approve_replan_candidate
 from production_control.persistence.replan_candidates import build_replan_candidates
 
@@ -75,6 +85,21 @@ def create_app(
             )
         return reference_time
 
+    def waiting_unit_operation_ids(
+        session: Session,
+        attempt_ids: tuple[str, ...],
+    ) -> list[str]:
+        operation_ids: list[str] = []
+        for attempt_id in attempt_ids:
+            attempt = session.get(WorkAttemptRow, attempt_id)
+            if attempt is None:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Forecast WAIT references missing WorkAttempt: {attempt_id}",
+                )
+            operation_ids.append(attempt.unit_operation_id)
+        return operation_ids
+
     @app.post(
         "/work-events",
         response_model=WorkEventResponse,
@@ -100,6 +125,7 @@ def create_app(
                 received_at=datetime.now(UTC),
                 station_code=payload.station_code,
                 worker_code=payload.worker_code,
+                expected_hold_minutes=payload.expected_hold_minutes,
             )
         except ValueError as exc:
             session.rollback()
@@ -126,6 +152,95 @@ def create_app(
             attempt_no=snapshot.attempt_no,
             active_minutes=snapshot.active_minutes,
             result=snapshot.result.value if snapshot.result is not None else None,
+        )
+
+    @app.get("/unit-operations", response_model=list[UnitOperationResponse])
+    def get_unit_operations(
+        session: Annotated[Session, Depends(get_session)],
+        lot_id: str | None = None,
+    ) -> list[UnitOperationResponse]:
+        return [
+            UnitOperationResponse(
+                operation_id=row.operation_id,
+                lot_id=row.lot_id,
+                unit_id=row.unit_id,
+                unit_code=row.unit_code,
+                routing_step_id=row.routing_step_id,
+                seq_no=row.seq_no,
+                process_code=row.process_code,
+                state=row.state,
+                eligible_at=row.eligible_at,
+                attempt_no=row.attempt_no,
+                active_minutes=row.active_minutes,
+                result=row.result,
+                last_event_at=row.last_event_at,
+                expected_remaining_minutes=row.expected_remaining_minutes,
+            )
+            for row in list_unit_operations(session=session, lot_id=lot_id)
+        ]
+
+    @app.patch(
+        "/unit-operations/{unit_operation_id}/expected-remaining",
+        response_model=ExpectedRemainingResponse,
+    )
+    def patch_expected_remaining(
+        unit_operation_id: str,
+        payload: ExpectedRemainingUpdateRequest,
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ExpectedRemainingResponse:
+        try:
+            operation = update_expected_remaining_minutes(
+                session=session,
+                unit_operation_id=unit_operation_id,
+                expected_remaining_minutes=payload.expected_remaining_minutes,
+            )
+        except LookupError as exc:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except ValueError as exc:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+
+        return ExpectedRemainingResponse(
+            operation_id=operation.unit_operation_id,
+            expected_remaining_minutes=float(operation.expected_remaining_minutes),
+        )
+
+    @app.get("/schedule-plan/current", response_model=CurrentPlanResponse)
+    def get_current_plan(
+        session: Annotated[Session, Depends(get_session)],
+    ) -> CurrentPlanResponse:
+        try:
+            snapshot = load_current_plan_snapshot(session=session)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+
+        return CurrentPlanResponse(
+            plan_id=snapshot.plan_id,
+            version=snapshot.version,
+            priority_rule=snapshot.priority_rule,
+            tasks=[
+                CurrentPlanTaskResponse(
+                    lot_id=task.lot_id,
+                    routing_step_id=task.routing_step_id,
+                    process_code=task.process_code,
+                    seq_no=task.seq_no,
+                    target_start=task.target_start,
+                    target_end=task.target_end,
+                    target_qty=task.target_qty,
+                    priority_rank=task.priority_rank,
+                )
+                for task in snapshot.tasks
+            ],
         )
 
     @app.get("/lots", response_model=list[LotAdminResponse])
@@ -263,6 +378,7 @@ def create_app(
                 detail=str(exc),
             ) from exc
 
+        waiting_ids = waiting_unit_operation_ids(session, snapshot.waiting_operation_ids)
         result = snapshot.result
         if result is None:
             return LiveForecastResponse(
@@ -274,7 +390,7 @@ def create_app(
                 gates=[],
                 processes=[],
                 missing_gate_ids=[],
-                waiting_operation_ids=list(snapshot.waiting_operation_ids),
+                waiting_operation_ids=waiting_ids,
             )
 
         return LiveForecastResponse(
@@ -314,7 +430,7 @@ def create_app(
                 for forecast in result.process_forecasts
             ],
             missing_gate_ids=list(result.missing_gate_ids),
-            waiting_operation_ids=list(snapshot.waiting_operation_ids),
+            waiting_operation_ids=waiting_ids,
         )
 
     @app.post("/replan-candidates", response_model=ReplanCandidatesResponse)
@@ -351,12 +467,12 @@ def create_app(
                     rule=candidate.rule.value,
                     kpi=CandidateKPIResponse(
                         late_lot_count=candidate.kpi.late_lot_count,
-                        total_tardiness_minutes=(
-                            candidate.kpi.total_tardiness_minutes
-                        ),
+                        total_tardiness_minutes=candidate.kpi.total_tardiness_minutes,
                         overtime_minutes=candidate.kpi.overtime_minutes,
                         change_count=candidate.kpi.change_count,
                     ),
+                    policy_compliant=candidate.policy_compliant,
+                    policy_violation_reason=candidate.policy_violation_reason,
                     tasks=[
                         ReplanCandidateTaskResponse(
                             lot_id=task.lot_id,

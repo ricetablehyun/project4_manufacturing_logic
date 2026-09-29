@@ -115,6 +115,7 @@ def test_invalid_state_transition_returns_409_without_persisting(tmp_path: Path)
         {
             "event_type": "HOLD",
             "reason": "cannot hold before start",
+            "expected_hold_minutes": 60,
         }
     )
 
@@ -130,6 +131,80 @@ def test_invalid_state_transition_returns_409_without_persisting(tmp_path: Path)
         assert event_count == 0
         assert operation is not None
         assert operation.state == "WAITING"
+    finally:
+        session.close()
+
+
+def test_hold_requires_worker_expected_hold_minutes(tmp_path: Path) -> None:
+    client, _ = make_client(tmp_path)
+    started = client.post("/work-events", json=start_payload())
+    assert started.status_code == 201
+
+    response = client.post(
+        "/work-events",
+        json={
+            "event_id": "API-E2",
+            "unit_operation_id": OPERATION_ID,
+            "event_type": "HOLD",
+            "occurred_at": "2026-10-05T09:10:00+09:00",
+            "station_code": "ASSEMBLY",
+            "worker_code": "WORKER-A",
+            "reason": "temporary tuning issue",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_hold_estimate_sets_and_resume_clears_hold_until(tmp_path: Path) -> None:
+    client, session_factory = make_client(tmp_path)
+    started = client.post("/work-events", json=start_payload())
+    assert started.status_code == 201
+
+    held = client.post(
+        "/work-events",
+        json={
+            "event_id": "API-E2",
+            "unit_operation_id": OPERATION_ID,
+            "event_type": "HOLD",
+            "occurred_at": "2026-10-05T09:10:00+09:00",
+            "station_code": "ASSEMBLY",
+            "worker_code": "WORKER-A",
+            "reason": "temporary tuning issue",
+            "expected_hold_minutes": 120,
+        },
+    )
+    assert held.status_code == 201
+
+    session = session_factory()
+    try:
+        operation = session.get(UnitOperationRow, OPERATION_ID)
+        assert operation is not None
+        assert operation.state == "HOLD"
+        assert operation.hold_until.isoformat().startswith("2026-10-05T11:10")
+    finally:
+        session.close()
+
+    resumed = client.post(
+        "/work-events",
+        json={
+            "event_id": "API-E3",
+            "unit_operation_id": OPERATION_ID,
+            "event_type": "RESUME",
+            "occurred_at": "2026-10-05T10:00:00+09:00",
+            "station_code": "ASSEMBLY",
+            "worker_code": "WORKER-A",
+            "reason": None,
+        },
+    )
+    assert resumed.status_code == 201
+
+    session = session_factory()
+    try:
+        operation = session.get(UnitOperationRow, OPERATION_ID)
+        assert operation is not None
+        assert operation.state == "RUNNING"
+        assert operation.hold_until is None
     finally:
         session.close()
 

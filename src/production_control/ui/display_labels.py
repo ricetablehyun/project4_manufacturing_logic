@@ -48,6 +48,28 @@ _PROCESS_LABELS = {
     "FINAL_TEST": "최종 성능시험",
 }
 
+_EVENT_TYPE_LABELS = {
+    "START": "작업 시작",
+    "HOLD": "보류",
+    "RESUME": "작업 재개",
+    "COMPLETE": "작업 완료",
+    "PASS": "합격",
+    "FAIL": "불합격",
+}
+
+_PRIORITY_RULE_LABELS = {
+    "FCFS": "FCFS · 먼저 들어온 LOT 우선",
+    "EDD": "EDD · 납기가 가까운 LOT 우선",
+    "SLACK": "Slack · 여유시간이 적은 LOT 우선",
+    "CR": "CR · 긴급도가 높은 LOT 우선",
+}
+
+_ACTION_LABELS = {
+    "KEEP_PLAN": "현재 계획 유지",
+    "MONITOR_ONLY": "주의 관찰",
+    "GENERATE_CANDIDATES": "재계획 후보 비교",
+}
+
 
 def _translate(value: object, labels: dict[str, str]) -> str:
     text = str(value)
@@ -72,6 +94,18 @@ def gate_type_label(value: object) -> str:
 
 def process_label(value: object) -> str:
     return _translate(value, _PROCESS_LABELS)
+
+
+def event_type_label(value: object) -> str:
+    return _translate(value, _EVENT_TYPE_LABELS)
+
+
+def priority_rule_label(value: object) -> str:
+    return _translate(value, _PRIORITY_RULE_LABELS)
+
+
+def action_label(value: object) -> str:
+    return _translate(value, _ACTION_LABELS)
 
 
 def display_datetime(value: object) -> str:

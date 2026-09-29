@@ -131,6 +131,8 @@ def test_urgent_replan_returns_four_transient_candidates_with_tasks(tmp_path: Pa
 
     for candidate in payload["candidates"]:
         assert candidate["rule"] == candidate["candidate_id"]
+        assert candidate["policy_compliant"] is True
+        assert candidate["policy_violation_reason"] is None
         assert len(candidate["tasks"]) == 10
         assert all(task["target_qty"] == 4 for task in candidate["tasks"])
         assert all(task["priority_rank"] > 0 for task in candidate["tasks"])

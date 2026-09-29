@@ -16,6 +16,7 @@ from production_control.core.candidate_evaluator import (
     CandidateKPI,
     PriorityRankSnapshot,
     count_priority_rank_changes,
+    select_candidate,
 )
 from production_control.core.dynamic_priority import (
     DynamicLotPriorityState,
@@ -39,6 +40,9 @@ from production_control.core.priority_rules import (
 )
 from production_control.core.replan_policy import ReplanAction
 from production_control.core.risk_engine import RiskLevel
+from production_control.core.urgent_dispatch_policy import (
+    evaluate_urgent_lot_dispatch_policy,
+)
 from production_control.persistence.forecast_input_bundle import (
     build_internal_lot_forecast_inputs,
 )
@@ -81,6 +85,8 @@ class PersistedReplanCandidate:
     rule: PriorityRule
     kpi: CandidateKPI
     tasks: tuple[ReplanCandidateTask, ...]
+    policy_compliant: bool
+    policy_violation_reason: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -439,6 +445,11 @@ def build_replan_candidates(
         states=states,
         calendar=calendar,
     )
+    urgent_lot_ids = {
+        summary.lot_id
+        for summary in live.result.lot_forecasts
+        if summary.risk_level == RiskLevel.URGENT
+    }
 
     built: dict[PriorityRule, PersistedReplanCandidate] = {}
 
@@ -455,6 +466,13 @@ def build_replan_candidates(
             resources=resources,
             calendar=calendar,
             start_time=as_of,
+        )
+        policy = evaluate_urgent_lot_dispatch_policy(
+            items=items,
+            schedule=schedule,
+            resources=resources,
+            calendar=calendar,
+            urgent_lot_ids=urgent_lot_ids,
         )
         candidate_forecast = evaluate_persisted_forecast(
             session=session,
@@ -484,6 +502,8 @@ def build_replan_candidates(
             rule=rule,
             kpi=kpi,
             tasks=tasks,
+            policy_compliant=policy.compliant,
+            policy_violation_reason=policy.violation_reason,
         )
         return kpi
 
@@ -495,6 +515,14 @@ def build_replan_candidates(
         built[candidate.rule]
         for candidate in orchestration.candidates
     )
+    compliant_candidates = tuple(
+        candidate for candidate in candidates if candidate.policy_compliant
+    )
+    recommended_candidate_id = None
+    if compliant_candidates:
+        recommended_candidate_id = select_candidate(
+            candidate.kpi for candidate in compliant_candidates
+        ).candidate_id
 
     return PersistedReplanCandidateSnapshot(
         parent_plan_id=live.plan_id,
@@ -502,7 +530,9 @@ def build_replan_candidates(
         as_of=as_of,
         risk_level=orchestration.risk_level,
         action=orchestration.action,
-        recommended_candidate_id=orchestration.recommended_candidate_id,
-        requires_manager_approval=orchestration.requires_manager_approval,
+        recommended_candidate_id=recommended_candidate_id,
+        requires_manager_approval=(
+            orchestration.requires_manager_approval and bool(compliant_candidates)
+        ),
         candidates=candidates,
     )
