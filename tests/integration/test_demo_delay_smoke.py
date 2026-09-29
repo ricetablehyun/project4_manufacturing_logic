@@ -41,6 +41,11 @@ def test_delay_smoke_exposes_worker_input_then_replan_flow(tmp_path: Path) -> No
     assert ready_payload["readiness"] == "READY"
     lot_001 = next(row for row in ready_payload["lots"] if row["lot_id"] == "LOT-101")
     assert lot_001["risk_level"] == "URGENT"
+    assert {row["lot_id"] for row in ready_payload["lots"]} == {
+        "LOT-101",
+        "LOT-102",
+        "LOT-103",
+    }
 
     candidates = client.post(
         "/replan-candidates",
@@ -56,3 +61,26 @@ def test_delay_smoke_exposes_worker_input_then_replan_flow(tmp_path: Path) -> No
         "CR",
     ]
     assert all("policy_compliant" in row for row in candidate_payload["candidates"])
+
+    compliant = [
+        row for row in candidate_payload["candidates"] if row["policy_compliant"] is True
+    ]
+    assert compliant
+    assert candidate_payload["recommended_candidate_id"] in {
+        row["candidate_id"] for row in compliant
+    }
+
+    # D075: the third presentation LOT exists specifically so the four dispatch
+    # rules do not collapse into one indistinguishable result after urgent
+    # LOT-001 keeps its hard-policy priority. At least two policy-compliant
+    # alternatives must therefore produce different D029 KPI signatures.
+    kpi_signatures = {
+        (
+            row["kpi"]["late_lot_count"],
+            row["kpi"]["total_tardiness_minutes"],
+            row["kpi"]["overtime_minutes"],
+            row["kpi"]["change_count"],
+        )
+        for row in compliant
+    }
+    assert len(kpi_signatures) >= 2
