@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from production_control.core.event_scheduler import schedule_operations_event_driven
 from production_control.core.pace_scheduler_adapter import ForecastReadiness
 from production_control.core.priority_rules import PriorityRule
+from production_control.domain.enums import OperationState
 from production_control.persistence.forecast_input_bundle import (
     build_internal_lot_forecast_inputs,
 )
@@ -98,6 +99,36 @@ def _validate_as_of_against_current_state(
         )
 
 
+def _worker_actionable_waiting_attempt_ids(
+    *,
+    session: Session,
+    waiting_attempt_ids: list[str],
+) -> tuple[str, ...]:
+    """Expose only WAIT blockers that D069 lets a worker resolve.
+
+    The Pace adapter can stay WAIT for other conservative reasons, including an
+    exhausted aggregate work budget with unfinished operations. Those are not
+    worker residual-time questions and must not be rendered as dozens of false
+    operator actions.
+    """
+
+    if not waiting_attempt_ids:
+        return ()
+
+    rows = session.scalars(
+        select(WorkAttemptRow.attempt_id)
+        .join(
+            UnitOperationRow,
+            WorkAttemptRow.unit_operation_id == UnitOperationRow.unit_operation_id,
+        )
+        .where(
+            WorkAttemptRow.attempt_id.in_(set(waiting_attempt_ids)),
+            UnitOperationRow.state == OperationState.RUNNING.value,
+        )
+    ).all()
+    return tuple(sorted(set(rows)))
+
+
 def build_live_forecast(
     *,
     session: Session,
@@ -138,13 +169,17 @@ def build_live_forecast(
             items.extend(bundle.items)
 
     if waiting_operation_ids:
+        actionable_waits = _worker_actionable_waiting_attempt_ids(
+            session=session,
+            waiting_attempt_ids=waiting_operation_ids,
+        )
         return LiveForecastSnapshot(
             plan_id=current_plan.plan_id,
             plan_version=current_plan.version,
             as_of=as_of,
             readiness=ForecastReadiness.WAIT,
             result=None,
-            waiting_operation_ids=tuple(sorted(set(waiting_operation_ids))),
+            waiting_operation_ids=actionable_waits,
         )
 
     item_tuple = tuple(items)
