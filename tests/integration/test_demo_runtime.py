@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 
 from production_control.demo.bootstrap import (
     DEMO_PLAN_ID,
+    DEMO_SNAPSHOT_AT,
+    DEMO_SNAPSHOT_RUNNING_OPERATION_ID,
     initialize_demo_database,
 )
 from production_control.demo.runtime import create_demo_app
@@ -14,7 +16,7 @@ from production_control.demo.runtime import create_demo_app
 SEOUL = ZoneInfo("Asia/Seoul")
 
 
-def test_demo_bootstrap_serves_fixture_through_real_api_boundary(tmp_path: Path) -> None:
+def test_demo_bootstrap_serves_snapshot_through_real_api_boundary(tmp_path: Path) -> None:
     database_path = initialize_demo_database(tmp_path / "demo.db")
     client = TestClient(create_demo_app(database_path))
 
@@ -22,9 +24,7 @@ def test_demo_bootstrap_serves_fixture_through_real_api_boundary(tmp_path: Path)
     gates = client.get("/inspection-gates")
     forecast = client.get(
         "/forecast",
-        params={
-            "as_of": datetime(2026, 10, 5, 9, 5, tzinfo=SEOUL).isoformat(),
-        },
+        params={"as_of": DEMO_SNAPSHOT_AT.isoformat()},
     )
 
     assert lots.status_code == 200
@@ -35,10 +35,69 @@ def test_demo_bootstrap_serves_fixture_through_real_api_boundary(tmp_path: Path)
     assert forecast.json()["plan_id"] == DEMO_PLAN_ID
     assert forecast.json()["plan_version"] == 1
     assert forecast.json()["readiness"] == "READY"
+    assert forecast.json()["waiting_operation_ids"] == []
     assert {row["lot_id"] for row in forecast.json()["lots"]} == {
         "LOT-101",
         "LOT-102",
     }
+
+
+def test_demo_reset_starts_from_midproduction_snapshot(tmp_path: Path) -> None:
+    database_path = initialize_demo_database(tmp_path / "demo.db")
+    client = TestClient(create_demo_app(database_path))
+
+    response = client.get("/unit-operations")
+    assert response.status_code == 200
+    operations = response.json()
+
+    lot_001_tuning = [
+        row
+        for row in operations
+        if row["lot_id"] == "LOT-101" and row["process_code"] == "TUNING"
+    ]
+    lot_002_tuning = [
+        row
+        for row in operations
+        if row["lot_id"] == "LOT-102" and row["process_code"] == "TUNING"
+    ]
+
+    assert sum(row["state"] == "COMPLETED" for row in lot_001_tuning) == 17
+    running = [row for row in lot_001_tuning if row["state"] == "RUNNING"]
+    assert len(running) == 1
+    assert running[0]["operation_id"] == DEMO_SNAPSHOT_RUNNING_OPERATION_ID
+    assert running[0]["unit_code"] == "U018"
+    assert all(row["state"] == "WAITING" for row in lot_002_tuning)
+
+
+def test_demo_hold_scenario_recalculates_without_manual_history_setup(
+    tmp_path: Path,
+) -> None:
+    database_path = initialize_demo_database(tmp_path / "demo.db")
+    client = TestClient(create_demo_app(database_path))
+    held_at = DEMO_SNAPSHOT_AT + timedelta(minutes=5)
+
+    held = client.post(
+        "/work-events",
+        json={
+            "event_id": "DEMO-HOLD-U018",
+            "unit_operation_id": DEMO_SNAPSHOT_RUNNING_OPERATION_ID,
+            "event_type": "HOLD",
+            "occurred_at": held_at.isoformat(),
+            "station_code": None,
+            "worker_code": None,
+            "reason": "TUNING_UNSTABLE",
+        },
+    )
+    assert held.status_code == 201
+    assert held.json()["state"] == "HOLD"
+
+    forecast = client.get(
+        "/forecast",
+        params={"as_of": held_at.isoformat()},
+    )
+    assert forecast.status_code == 200
+    assert forecast.json()["readiness"] == "READY"
+    assert forecast.json()["waiting_operation_ids"] == []
 
 
 def test_demo_forecast_handles_running_event_before_normal_work_window(
@@ -46,14 +105,29 @@ def test_demo_forecast_handles_running_event_before_normal_work_window(
 ) -> None:
     database_path = initialize_demo_database(tmp_path / "demo.db")
     client = TestClient(create_demo_app(database_path))
-    started_at = datetime(2026, 9, 29, 8, 39, tzinfo=SEOUL)
-    as_of = datetime(2026, 9, 29, 8, 40, tzinfo=SEOUL)
 
+    held_at = DEMO_SNAPSHOT_AT + timedelta(minutes=5)
+    held = client.post(
+        "/work-events",
+        json={
+            "event_id": "DEMO-PRE-SHIFT-PREP-HOLD",
+            "unit_operation_id": DEMO_SNAPSHOT_RUNNING_OPERATION_ID,
+            "event_type": "HOLD",
+            "occurred_at": held_at.isoformat(),
+            "station_code": None,
+            "worker_code": None,
+            "reason": "TUNING_UNSTABLE",
+        },
+    )
+    assert held.status_code == 201
+
+    started_at = datetime(2026, 10, 15, 8, 39, tzinfo=SEOUL)
+    as_of = datetime(2026, 10, 15, 8, 40, tzinfo=SEOUL)
     started = client.post(
         "/work-events",
         json={
             "event_id": "DEMO-PRE-SHIFT-START",
-            "unit_operation_id": "OP::LOT-101-U01::STEP-01-TAPING",
+            "unit_operation_id": "OP::LOT-102-U01::STEP-04-TUNING",
             "event_type": "START",
             "occurred_at": started_at.isoformat(),
             "station_code": None,
@@ -73,6 +147,24 @@ def test_demo_forecast_handles_running_event_before_normal_work_window(
     assert payload["as_of"] == as_of.isoformat()
     assert payload["readiness"] == "READY"
     assert payload["waiting_operation_ids"] == []
+
+
+def test_demo_wait_list_exposes_only_worker_actionable_running_operation(
+    tmp_path: Path,
+) -> None:
+    database_path = initialize_demo_database(tmp_path / "demo.db")
+    client = TestClient(create_demo_app(database_path))
+    far_future = DEMO_SNAPSHOT_AT + timedelta(days=5)
+
+    forecast = client.get(
+        "/forecast",
+        params={"as_of": far_future.isoformat()},
+    )
+
+    assert forecast.status_code == 200
+    payload = forecast.json()
+    assert payload["readiness"] == "WAIT"
+    assert payload["waiting_operation_ids"] == [DEMO_SNAPSHOT_RUNNING_OPERATION_ID]
 
 
 def test_demo_uses_shop_floor_codes_and_realistic_lot_scale(tmp_path: Path) -> None:
@@ -158,11 +250,20 @@ def test_demo_reset_restores_deterministic_initial_state(tmp_path: Path) -> None
     initialize_demo_database(database_path, reset=True)
     reset_client = TestClient(create_demo_app(database_path))
     lots = reset_client.get("/lots")
+    operations = reset_client.get("/unit-operations")
 
     assert lots.status_code == 200
     lot_101 = next(row for row in lots.json() if row["lot_id"] == "LOT-101")
     assert lot_101["status"] == "ACTIVE"
     assert lot_101["quantity"] == 30
+
+    assert operations.status_code == 200
+    running = next(
+        row
+        for row in operations.json()
+        if row["operation_id"] == DEMO_SNAPSHOT_RUNNING_OPERATION_ID
+    )
+    assert running["state"] == "RUNNING"
 
 
 def test_demo_runtime_rejects_missing_uninitialized_database(tmp_path: Path) -> None:
