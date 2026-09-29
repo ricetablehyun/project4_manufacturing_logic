@@ -427,6 +427,21 @@ def _render_operator_input(
             placeholder="보류(HOLD) 또는 최종시험 불합격(FAIL)에서는 필수",
             key=f"operator-event-reason-{operation_id}",
         )
+        expected_hold_minutes: float | None = None
+        if event_type == "HOLD":
+            st.caption(
+                "예상 보류시간은 LOT 전체 지연시간에 직접 더하지 않습니다. "
+                "이 Unit이 다시 작업 가능해질 예상시각을 계산하는 데 사용합니다."
+            )
+            expected_hold_minutes = float(
+                st.number_input(
+                    "예상 보류시간(분, 경과시간)",
+                    min_value=1.0,
+                    value=480.0,
+                    step=30.0,
+                    key=f"operator-hold-minutes-{operation_id}",
+                )
+            )
         submitted = st.form_submit_button("실적 반영", use_container_width=True)
 
     if not submitted:
@@ -454,15 +469,22 @@ def _render_operator_input(
                 event_type=event_type,
                 occurred_at=occurred_at,
                 reason=reason.strip() or None,
+                expected_hold_minutes=expected_hold_minutes,
             )
     except (ApiClientError, ValueError) as exc:
         st.error(f"실적을 반영하지 못했습니다: {exc}")
         return
 
+    hold_suffix = (
+        f" · 예상 보류 {expected_hold_minutes:g}분"
+        if expected_hold_minutes is not None
+        else ""
+    )
     st.session_state["flash_message"] = (
         f"{lot_code_by_id.get(selected_lot, selected_lot)} / {units[selected_unit]} / "
         f"{process_label(operation['process_code'])}: "
         f"{event_type_label(event_type)} 반영 완료 · 상태 {status_label(result['state'])}"
+        f"{hold_suffix}"
     )
     st.rerun()
 
