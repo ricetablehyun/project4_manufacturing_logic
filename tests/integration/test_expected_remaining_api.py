@@ -88,6 +88,7 @@ def test_worker_expected_remaining_is_visible_and_cleared_by_next_event(
             "station_code": None,
             "worker_code": None,
             "reason": "unexpected adjustment needed",
+            "expected_hold_minutes": 60,
         },
     )
     assert held.status_code == 201
