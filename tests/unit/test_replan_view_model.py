@@ -1,6 +1,7 @@
 from production_control.ui.replan_view_model import (
     build_plan_change_rows,
     build_priority_change_rows,
+    build_replan_impact_rows,
     rank_replan_candidates,
     summarize_replan_status,
 )
@@ -158,6 +159,51 @@ def test_plan_change_rows_include_time_window_change_even_when_priority_is_same(
     assert rows[0]["start_shift_minutes"] == 30
     assert rows[0]["end_shift_minutes"] == 30
     assert rows[0]["priority_movement"] == "유지"
+
+
+def test_replan_impact_rows_separate_realized_drift_from_candidate_effect() -> None:
+    approved = (
+        {
+            "lot_id": "LOT-101",
+            "routing_step_id": "STEP-TUNING",
+            "process_code": "TUNING",
+            "target_start": "2026-10-22T09:00:00+09:00",
+            "target_end": "2026-10-22T12:00:00+09:00",
+            "priority_rank": 4,
+        },
+    )
+    forecast = (
+        {
+            "lot_id": "LOT-101",
+            "process_code": "TUNING",
+            "forecast_start": "2026-10-22T13:00:00+09:00",
+            "forecast_end": "2026-10-22T15:00:00+09:00",
+        },
+    )
+    candidate = (
+        {
+            "lot_id": "LOT-101",
+            "routing_step_id": "STEP-TUNING",
+            "target_start": "2026-10-22T13:00:00+09:00",
+            "target_end": "2026-10-22T14:30:00+09:00",
+            "priority_rank": 2,
+        },
+    )
+
+    rows = build_replan_impact_rows(
+        approved_tasks=approved,
+        current_forecast_rows=forecast,
+        candidate_tasks=candidate,
+        lot_code_by_id={"LOT-101": "LOT-001"},
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["realized_end_drift_minutes"] == 180
+    assert row["replan_end_effect_minutes"] == -30
+    assert row["approved_rank"] == 4
+    assert row["candidate_rank"] == 2
+    assert row["priority_movement"] == "앞당김"
 
 
 def test_priority_change_rows_show_only_changed_lot_process_ranks() -> None:
