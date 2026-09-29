@@ -20,6 +20,7 @@ from production_control.core.pace_scheduler_adapter import (
     UnitPaceSignal,
     build_pace_schedule_inputs,
 )
+from production_control.domain.enums import OperationState
 from production_control.persistence.execution_projection import (
     UnitExecutionProjection,
     project_unit_execution_order,
@@ -93,6 +94,15 @@ def _normal_input_from_projection(
                 as_of=as_of,
             )
 
+        eligible_at = operation.eligible_at
+        release_at = max(lot.release_at, operation.eligible_at)
+        if (
+            projected.operation_state is OperationState.HOLD
+            and operation.hold_until is not None
+        ):
+            eligible_at = max(eligible_at, operation.hold_until)
+            release_at = max(release_at, operation.hold_until)
+
         inputs.append(
             UnitPaceSchedulingInput(
                 operation_id=attempt.attempt_id,
@@ -101,8 +111,8 @@ def _normal_input_from_projection(
                 step_seq=projected.step_seq,
                 process_code=projected.process_code,
                 state=projected.operation_state,
-                eligible_at=operation.eligible_at,
-                release_at=max(lot.release_at, operation.eligible_at),
+                eligible_at=eligible_at,
+                release_at=release_at,
                 requirements=load_routing_step_requirements(
                     session,
                     routing_step_id=step.routing_step_id,
