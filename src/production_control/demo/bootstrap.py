@@ -44,8 +44,8 @@ def _demo_dt(month: int, day: int, hour: int, minute: int = 0) -> datetime:
     return datetime(2026, month, day, hour, minute, tzinfo=SEOUL)
 
 
-DEMO_SNAPSHOT_AT = _demo_dt(10, 14, 13)
-DEMO_SNAPSHOT_RUNNING_OPERATION_ID = "OP::LOT-101-U18::STEP-04-TUNING"
+DEMO_SNAPSHOT_AT = _demo_dt(10, 22, 13)
+DEMO_SNAPSHOT_RUNNING_OPERATION_ID = "OP::LOT-101-U30::STEP-04-TUNING"
 
 
 def _ensure_demo_units(
@@ -238,13 +238,13 @@ def _complete_unit_range(
 
 
 def seed_demo_execution_snapshot(session: Session) -> None:
-    """Seed the presentation DB at a deterministic mid-production snapshot.
+    """Seed a deterministic late-stage snapshot for the HOLD demonstration.
 
-    The snapshot is intentionally not the beginning of production. LOT-001 has
-    progressed into tuning, downstream transfer has already begun after K=9,
-    and LOT-002 is waiting for the shared tuning bottleneck. The presenter can
-    therefore demonstrate one shop-floor exception without manually creating
-    several days of history first.
+    LOT-001 has 29 of 30 Units completed through final test. U030 is the final
+    tuning Unit and therefore becomes critical when it is placed on HOLD: there
+    is no other LOT-001 tuning Unit left to process first. LOT-002 is waiting for
+    the same tuning bottleneck, so the scheduler can still use the resource while
+    U030 is unavailable.
     """
 
     for lot_id in DEMO_LOT_IDS:
@@ -259,7 +259,6 @@ def seed_demo_execution_snapshot(session: Session) -> None:
         external.updated_at = external.expected_finish_at
     session.commit()
 
-    # LOT-001: prior internal work completed before the current tuning stage.
     _complete_unit_range(
         session,
         lot_id="LOT-101",
@@ -280,25 +279,37 @@ def seed_demo_execution_snapshot(session: Session) -> None:
     )
 
     tuning_starts = (
-        (1, _demo_dt(10, 6, 9)),
-        (2, _demo_dt(10, 6, 11)),
-        (3, _demo_dt(10, 6, 14)),
-        (4, _demo_dt(10, 7, 9)),
-        (5, _demo_dt(10, 7, 11)),
-        (6, _demo_dt(10, 7, 14)),
-        (7, _demo_dt(10, 8, 9)),
-        (8, _demo_dt(10, 8, 11)),
-        (9, _demo_dt(10, 8, 14)),
-        (10, _demo_dt(10, 9, 9)),
-        (11, _demo_dt(10, 9, 13)),
-        (12, _demo_dt(10, 12, 9)),
-        (13, _demo_dt(10, 12, 13)),
-        (14, _demo_dt(10, 13, 9)),
-        (15, _demo_dt(10, 13, 11)),
-        (16, _demo_dt(10, 13, 14)),
-        (17, _demo_dt(10, 14, 9)),
+        _demo_dt(10, 6, 9),
+        _demo_dt(10, 6, 11),
+        _demo_dt(10, 6, 14),
+        _demo_dt(10, 7, 9),
+        _demo_dt(10, 7, 11),
+        _demo_dt(10, 7, 14),
+        _demo_dt(10, 8, 9),
+        _demo_dt(10, 8, 11),
+        _demo_dt(10, 8, 14),
+        _demo_dt(10, 9, 9),
+        _demo_dt(10, 9, 13),
+        _demo_dt(10, 12, 9),
+        _demo_dt(10, 12, 13),
+        _demo_dt(10, 13, 9),
+        _demo_dt(10, 13, 11),
+        _demo_dt(10, 13, 14),
+        _demo_dt(10, 14, 9),
+        _demo_dt(10, 14, 11),
+        _demo_dt(10, 14, 14),
+        _demo_dt(10, 15, 9),
+        _demo_dt(10, 15, 11),
+        _demo_dt(10, 15, 14),
+        _demo_dt(10, 16, 9),
+        _demo_dt(10, 16, 11),
+        _demo_dt(10, 16, 14),
+        _demo_dt(10, 19, 9),
+        _demo_dt(10, 19, 11),
+        _demo_dt(10, 19, 14),
+        _demo_dt(10, 20, 9),
     )
-    for unit_index, started_at in tuning_starts:
+    for unit_index, started_at in enumerate(tuning_starts, start=1):
         _complete_unit_operation(
             session,
             lot_id="LOT-101",
@@ -307,49 +318,54 @@ def seed_demo_execution_snapshot(session: Session) -> None:
             started_at=started_at,
             duration_minutes=25,
         )
+        if unit_index < 29:
+            _complete_unit_operation(
+                session,
+                lot_id="LOT-101",
+                unit_index=unit_index,
+                step_id="STEP-05-FINISH-ASSEMBLY",
+                started_at=started_at + timedelta(minutes=30),
+                duration_minutes=10,
+            )
+            _complete_unit_operation(
+                session,
+                lot_id="LOT-101",
+                unit_index=unit_index,
+                step_id="STEP-06-FINAL-TEST",
+                started_at=started_at + timedelta(minutes=45),
+                duration_minutes=30,
+                terminal_event=WorkEventType.PASS,
+            )
 
-    # K=9 has already released the downstream flow for the first transfer set.
-    _complete_unit_range(
-        session,
-        lot_id="LOT-101",
-        unit_indices=range(1, 9),
-        step_id="STEP-05-FINISH-ASSEMBLY",
-        started_at=_demo_dt(10, 9, 14),
-        duration_minutes=10,
-        parallelism=2,
-    )
-    _complete_unit_range(
-        session,
-        lot_id="LOT-101",
-        unit_indices=range(1, 5),
-        step_id="STEP-06-FINAL-TEST",
-        started_at=_demo_dt(10, 14, 9),
-        duration_minutes=30,
-        parallelism=1,
-        terminal_event=WorkEventType.PASS,
-    )
-
-    # U018 is the one live tuning operation used for the HOLD demonstration.
-    _record_demo_event(
-        session,
-        lot_id="LOT-101",
-        unit_index=18,
-        step_id="STEP-04-TUNING",
-        event_type=WorkEventType.START,
-        occurred_at=_demo_dt(10, 14, 12, 50),
-    )
-
-    # One downstream completion fixes the snapshot reference at exactly 13:00.
+    # U029 finishes downstream work at 13:00 on the snapshot day.
     _complete_unit_operation(
         session,
         lot_id="LOT-101",
-        unit_index=9,
+        unit_index=29,
         step_id="STEP-05-FINISH-ASSEMBLY",
-        started_at=_demo_dt(10, 14, 12, 50),
+        started_at=_demo_dt(10, 22, 12, 10),
         duration_minutes=10,
     )
+    _complete_unit_operation(
+        session,
+        lot_id="LOT-101",
+        unit_index=29,
+        step_id="STEP-06-FINAL-TEST",
+        started_at=_demo_dt(10, 22, 12, 30),
+        duration_minutes=30,
+        terminal_event=WorkEventType.PASS,
+    )
 
-    # LOT-002 has finished its upstream work and waits for the same tuning station.
+    # U030 is the final live tuning operation used for the critical HOLD demo.
+    _record_demo_event(
+        session,
+        lot_id="LOT-101",
+        unit_index=30,
+        step_id="STEP-04-TUNING",
+        event_type=WorkEventType.START,
+        occurred_at=_demo_dt(10, 22, 12, 50),
+    )
+
     _complete_unit_range(
         session,
         lot_id="LOT-102",
