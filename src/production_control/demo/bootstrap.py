@@ -28,7 +28,7 @@ from production_control.persistence.models import (
 SEOUL = ZoneInfo("Asia/Seoul")
 DEFAULT_DEMO_DB_PATH = Path("data/demo.db")
 DEMO_PLAN_ID = "PLAN-DEMO-BASELINE-1"
-DEMO_LOT_IDS = ("LOT-101", "LOT-102")
+DEMO_LOT_IDS = ("LOT-101", "LOT-102", "LOT-103")
 DEMO_QUANTITY = 30
 DEMO_INTERNAL_STEPS = (
     "STEP-01-TAPING",
@@ -69,16 +69,49 @@ def _ensure_demo_units(
         unit.status = "WAITING"
 
 
+def _ensure_demo_lot_103(session: Session) -> None:
+    """Add the synthetic third presentation LOT without changing F02 itself."""
+
+    if session.get(LotRow, "LOT-103") is None:
+        session.add(
+            LotRow(
+                lot_id="LOT-103",
+                product_id="PRODUCT-RF-MOCK-A",
+                lot_code="LOT-003",
+                quantity=DEMO_QUANTITY,
+                release_at=_demo_dt(10, 8, 9),
+                due_at=_demo_dt(11, 4, 17),
+                status="ACTIVE",
+                created_at=_demo_dt(10, 8, 8),
+            )
+        )
+
+    if session.get(InspectionGateRow, "GATE-LOT-103-SHIPPING-INSPECTION") is None:
+        session.add(
+            InspectionGateRow(
+                gate_id="GATE-LOT-103-SHIPPING-INSPECTION",
+                lot_id="LOT-103",
+                gate_type="SHIPPING_INSPECTION",
+                required_after_step_id="STEP-06-FINAL-TEST",
+                planned_at=_demo_dt(10, 28, 9),
+                status="PLANNED",
+            )
+        )
+    session.flush()
+
+
 def apply_demo_fixture_overrides(session: Session) -> None:
     """Convert the small F02 seed into a separate presentation demo dataset.
 
     F02 itself remains a 4-Unit minute-scale regression fixture. The local
-    presentation demo instead uses 30 Units per LOT, globally sequential Unit
-    codes, shop-floor remembered LOT-level process windows, K=9 for the first
-    downstream release after tuning, and quality-notified shipping-inspection
-    start dates. Unit standard minutes remain the confirmed D035 active-work
-    values and are not rewritten into LOT flow-time values.
+    presentation demo uses three 30-Unit LOTs, globally sequential Unit codes,
+    management-level process windows, K=9 for the first downstream release
+    after tuning, and quality-notified shipping-inspection start dates. LOT-003
+    is synthetic comparison data used only to make the D029/D073 replanning
+    alternatives materially different.
     """
+
+    _ensure_demo_lot_103(session)
 
     lot_specs = (
         (
@@ -100,6 +133,16 @@ def apply_demo_fixture_overrides(session: Session) -> None:
             _demo_dt(11, 6, 9),
             _demo_dt(10, 9, 13),
             31,
+        ),
+        (
+            "LOT-103",
+            "LOT-003",
+            _demo_dt(10, 8, 9),
+            _demo_dt(11, 4, 17),
+            "GATE-LOT-103-SHIPPING-INSPECTION",
+            _demo_dt(10, 28, 9),
+            _demo_dt(10, 13, 13),
+            61,
         ),
     )
 
@@ -237,14 +280,84 @@ def _complete_unit_range(
         )
 
 
-def seed_demo_execution_snapshot(session: Session) -> None:
-    """Seed a deterministic late-stage snapshot for the HOLD demonstration.
+def _seed_demo_lot_003_progress(session: Session) -> None:
+    """Seed partial LOT-003 progress so EDD/Slack/CR have a real trade-off."""
 
-    LOT-001 has 29 of 30 Units completed through final test. U030 is the final
-    tuning Unit and therefore becomes critical when it is placed on HOLD: there
-    is no other LOT-001 tuning Unit left to process first. LOT-002 is waiting for
-    the same tuning bottleneck, so the scheduler can still use the resource while
-    U030 is unavailable.
+    _complete_unit_range(
+        session,
+        lot_id="LOT-103",
+        unit_indices=range(1, 31),
+        step_id="STEP-01-TAPING",
+        started_at=_demo_dt(10, 8, 9),
+        duration_minutes=10,
+        parallelism=2,
+    )
+    _complete_unit_range(
+        session,
+        lot_id="LOT-103",
+        unit_indices=range(1, 31),
+        step_id="STEP-03-GENERAL-ASSEMBLY",
+        started_at=_demo_dt(10, 14, 9),
+        duration_minutes=10,
+        parallelism=2,
+    )
+
+    tuning_starts = [
+        _demo_dt(10, 20, 10) + timedelta(minutes=25 * offset)
+        for offset in range(16)
+    ] + [
+        _demo_dt(10, 21, 9) + timedelta(minutes=25 * offset)
+        for offset in range(4)
+    ]
+    for unit_index, started_at in enumerate(tuning_starts, start=1):
+        _complete_unit_operation(
+            session,
+            lot_id="LOT-103",
+            unit_index=unit_index,
+            step_id="STEP-04-TUNING",
+            started_at=started_at,
+            duration_minutes=25,
+        )
+
+    for unit_index in range(1, 11):
+        _complete_unit_operation(
+            session,
+            lot_id="LOT-103",
+            unit_index=unit_index,
+            step_id="STEP-05-FINISH-ASSEMBLY",
+            started_at=_demo_dt(10, 20, 14) + timedelta(minutes=10 * (unit_index - 1)),
+            duration_minutes=10,
+        )
+    for unit_index in range(11, 16):
+        _complete_unit_operation(
+            session,
+            lot_id="LOT-103",
+            unit_index=unit_index,
+            step_id="STEP-05-FINISH-ASSEMBLY",
+            started_at=_demo_dt(10, 21, 9) + timedelta(minutes=10 * (unit_index - 11)),
+            duration_minutes=10,
+        )
+    for unit_index in range(1, 11):
+        _complete_unit_operation(
+            session,
+            lot_id="LOT-103",
+            unit_index=unit_index,
+            step_id="STEP-06-FINAL-TEST",
+            started_at=_demo_dt(10, 21, 10, 50)
+            + timedelta(minutes=30 * (unit_index - 1)),
+            duration_minutes=30,
+            terminal_event=WorkEventType.PASS,
+        )
+
+
+def seed_demo_execution_snapshot(session: Session) -> None:
+    """Seed the deterministic presentation snapshot used for D072/D075.
+
+    LOT-001 is almost complete with U030 still RUNNING at tuning. LOT-002 is an
+    older but not-yet-tuned LOT. LOT-003 was released later, has a closer Gate,
+    and already has partial downstream progress. The third LOT exists only so
+    replanning rules can make materially different choices after urgent LOT-001
+    keeps its hard-policy priority.
     """
 
     for lot_id in DEMO_LOT_IDS:
@@ -337,7 +450,6 @@ def seed_demo_execution_snapshot(session: Session) -> None:
                 terminal_event=WorkEventType.PASS,
             )
 
-    # U029 finishes downstream work at 13:00 on the snapshot day.
     _complete_unit_operation(
         session,
         lot_id="LOT-101",
@@ -356,7 +468,6 @@ def seed_demo_execution_snapshot(session: Session) -> None:
         terminal_event=WorkEventType.PASS,
     )
 
-    # U030 is the final live tuning operation used for the critical HOLD demo.
     _record_demo_event(
         session,
         lot_id="LOT-101",
@@ -385,14 +496,11 @@ def seed_demo_execution_snapshot(session: Session) -> None:
         parallelism=2,
     )
 
+    _seed_demo_lot_003_progress(session)
+
 
 def seed_demo_baseline_plan(session: Session) -> None:
-    """Persist a LOT x process baseline plan for the presentation demo.
-
-    The task windows are management-level process plans based on the remembered
-    shop-floor flow spans recorded in Notion. They are intentionally separate
-    from Unit active standard minutes used by the Forecast engine.
-    """
+    """Persist a LOT x process baseline plan for the presentation demo."""
 
     session.add(
         SchedulePlanRow(
@@ -413,7 +521,6 @@ def seed_demo_baseline_plan(session: Session) -> None:
     )
 
     task_specs = [
-        # LOT-001: taping ~1.5d, general assembly ~1.5d, tuning ~10d.
         ("LOT-101", "STEP-01-TAPING", _demo_dt(9, 28, 9), _demo_dt(9, 29, 13)),
         (
             "LOT-101",
@@ -434,7 +541,6 @@ def seed_demo_baseline_plan(session: Session) -> None:
             _demo_dt(10, 12, 9),
             _demo_dt(10, 22, 17),
         ),
-        # LOT-002 enters the same bottleneck station after LOT-001 tuning.
         ("LOT-102", "STEP-01-TAPING", _demo_dt(10, 5, 9), _demo_dt(10, 6, 13)),
         (
             "LOT-102",
@@ -442,18 +548,38 @@ def seed_demo_baseline_plan(session: Session) -> None:
             _demo_dt(10, 9, 13),
             _demo_dt(10, 12, 17),
         ),
-        ("LOT-102", "STEP-04-TUNING", _demo_dt(10, 20, 9), _demo_dt(11, 2, 17)),
+        ("LOT-102", "STEP-04-TUNING", _demo_dt(10, 28, 9), _demo_dt(11, 6, 17)),
         (
             "LOT-102",
             "STEP-05-FINISH-ASSEMBLY",
-            _demo_dt(10, 23, 9),
-            _demo_dt(11, 3, 13),
+            _demo_dt(11, 2, 9),
+            _demo_dt(11, 9, 13),
         ),
         (
             "LOT-102",
             "STEP-06-FINAL-TEST",
-            _demo_dt(10, 26, 9),
-            _demo_dt(11, 5, 17),
+            _demo_dt(11, 3, 9),
+            _demo_dt(11, 10, 17),
+        ),
+        ("LOT-103", "STEP-01-TAPING", _demo_dt(10, 8, 9), _demo_dt(10, 9, 13)),
+        (
+            "LOT-103",
+            "STEP-03-GENERAL-ASSEMBLY",
+            _demo_dt(10, 13, 13),
+            _demo_dt(10, 14, 17),
+        ),
+        ("LOT-103", "STEP-04-TUNING", _demo_dt(10, 15, 9), _demo_dt(10, 27, 17)),
+        (
+            "LOT-103",
+            "STEP-05-FINISH-ASSEMBLY",
+            _demo_dt(10, 20, 9),
+            _demo_dt(10, 27, 13),
+        ),
+        (
+            "LOT-103",
+            "STEP-06-FINAL-TEST",
+            _demo_dt(10, 21, 9),
+            _demo_dt(10, 27, 17),
         ),
     ]
     task_specs.sort(key=lambda item: (item[2], item[0], item[1]))
