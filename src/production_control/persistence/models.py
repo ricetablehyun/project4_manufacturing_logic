@@ -135,6 +135,7 @@ class UnitOperationRow(Base):
     state: Mapped[str] = mapped_column(String, nullable=False)
     eligible_at: Mapped[datetime] = mapped_column(OffsetDateTime(), nullable=False)
     hold_remaining_minutes: Mapped[float | None] = mapped_column(Float)
+    hold_until: Mapped[datetime | None] = mapped_column(OffsetDateTime())
     expected_remaining_minutes: Mapped[float | None] = mapped_column(Float)
     current_attempt_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
