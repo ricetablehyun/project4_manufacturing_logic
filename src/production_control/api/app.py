@@ -471,6 +471,8 @@ def create_app(
                         overtime_minutes=candidate.kpi.overtime_minutes,
                         change_count=candidate.kpi.change_count,
                     ),
+                    policy_compliant=candidate.policy_compliant,
+                    policy_violation_reason=candidate.policy_violation_reason,
                     tasks=[
                         ReplanCandidateTaskResponse(
                             lot_id=task.lot_id,
