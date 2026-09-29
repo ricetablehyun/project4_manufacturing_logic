@@ -25,16 +25,20 @@ def test_demo_bootstrap_serves_snapshot_through_real_api_boundary(tmp_path: Path
     forecast = client.get("/forecast", params={"as_of": DEMO_SNAPSHOT_AT.isoformat()})
 
     assert lots.status_code == 200
-    assert [row["lot_id"] for row in lots.json()] == ["LOT-101", "LOT-102"]
+    assert [row["lot_id"] for row in lots.json()] == ["LOT-101", "LOT-102", "LOT-103"]
     assert gates.status_code == 200
-    assert len(gates.json()) == 2
+    assert len(gates.json()) == 3
     assert forecast.status_code == 200
     payload = forecast.json()
     assert payload["plan_id"] == DEMO_PLAN_ID
     assert payload["plan_version"] == 1
     assert payload["readiness"] == "READY"
     assert payload["waiting_operation_ids"] == []
-    assert {row["lot_id"] for row in payload["lots"]} == {"LOT-101", "LOT-102"}
+    assert {row["lot_id"] for row in payload["lots"]} == {
+        "LOT-101",
+        "LOT-102",
+        "LOT-103",
+    }
 
 
 def test_demo_reset_starts_from_critical_late_stage_snapshot(tmp_path: Path) -> None:
@@ -60,6 +64,21 @@ def test_demo_reset_starts_from_critical_late_stage_snapshot(tmp_path: Path) -> 
         for row in operations
         if row["lot_id"] == "LOT-102" and row["process_code"] == "TUNING"
     ]
+    lot_003_tuning = [
+        row
+        for row in operations
+        if row["lot_id"] == "LOT-103" and row["process_code"] == "TUNING"
+    ]
+    lot_003_finish = [
+        row
+        for row in operations
+        if row["lot_id"] == "LOT-103" and row["process_code"] == "FINISH_ASSEMBLY"
+    ]
+    lot_003_final = [
+        row
+        for row in operations
+        if row["lot_id"] == "LOT-103" and row["process_code"] == "FINAL_TEST"
+    ]
 
     assert sum(row["state"] == "COMPLETED" for row in lot_001_tuning) == 29
     assert sum(row["state"] == "COMPLETED" for row in lot_001_final_test) == 29
@@ -68,6 +87,9 @@ def test_demo_reset_starts_from_critical_late_stage_snapshot(tmp_path: Path) -> 
     assert running[0]["operation_id"] == DEMO_SNAPSHOT_RUNNING_OPERATION_ID
     assert running[0]["unit_code"] == "U030"
     assert all(row["state"] == "WAITING" for row in lot_002_tuning)
+    assert sum(row["state"] == "COMPLETED" for row in lot_003_tuning) == 20
+    assert sum(row["state"] == "COMPLETED" for row in lot_003_finish) == 15
+    assert sum(row["state"] == "COMPLETED" for row in lot_003_final) == 10
 
 
 def test_demo_hold_delays_only_critical_unit_and_recalculates_forecast(
@@ -179,19 +201,22 @@ def test_demo_uses_shop_floor_codes_and_realistic_lot_scale(tmp_path: Path) -> N
     lots_by_id = {row["lot_id"]: row for row in lots.json()}
     assert lots_by_id["LOT-101"]["lot_code"] == "LOT-001"
     assert lots_by_id["LOT-102"]["lot_code"] == "LOT-002"
-    assert lots_by_id["LOT-101"]["quantity"] == 30
-    assert lots_by_id["LOT-102"]["quantity"] == 30
+    assert lots_by_id["LOT-103"]["lot_code"] == "LOT-003"
+    assert {row["quantity"] for row in lots_by_id.values()} == {30}
 
     unit_codes = sorted({row["unit_code"] for row in operations.json()})
-    assert len(unit_codes) == 60
+    assert len(unit_codes) == 90
     assert unit_codes[0] == "U001"
     assert unit_codes[29] == "U030"
     assert unit_codes[30] == "U031"
-    assert unit_codes[-1] == "U060"
+    assert unit_codes[59] == "U060"
+    assert unit_codes[60] == "U061"
+    assert unit_codes[-1] == "U090"
 
     gates_by_lot = {row["lot_id"]: row for row in gates.json()}
     assert gates_by_lot["LOT-101"]["planned_at"].startswith("2026-10-23T09:00")
     assert gates_by_lot["LOT-102"]["planned_at"].startswith("2026-11-06T09:00")
+    assert gates_by_lot["LOT-103"]["planned_at"].startswith("2026-10-28T09:00")
 
 
 def test_demo_current_plan_is_lot_process_scale_not_unit_schedule(tmp_path: Path) -> None:
@@ -204,13 +229,14 @@ def test_demo_current_plan_is_lot_process_scale_not_unit_schedule(tmp_path: Path
     payload = response.json()
     assert payload["plan_id"] == DEMO_PLAN_ID
     assert payload["version"] == 1
-    assert len(payload["tasks"]) == 10
+    assert len(payload["tasks"]) == 15
     assert {task["target_qty"] for task in payload["tasks"]} == {30}
 
     tasks = {(task["lot_id"], task["process_code"]): task for task in payload["tasks"]}
     assert tasks[("LOT-101", "TAPING")]["target_start"].startswith("2026-09-28T09:00")
     assert tasks[("LOT-101", "TUNING")]["target_end"].startswith("2026-10-19T17:00")
-    assert tasks[("LOT-102", "TUNING")]["target_start"].startswith("2026-10-20T09:00")
+    assert tasks[("LOT-103", "TUNING")]["target_start"].startswith("2026-10-15T09:00")
+    assert tasks[("LOT-102", "TUNING")]["target_start"].startswith("2026-10-28T09:00")
 
 
 def test_demo_bootstrap_requires_explicit_reset_to_replace_existing_db(
