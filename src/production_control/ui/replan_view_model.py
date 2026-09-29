@@ -180,7 +180,7 @@ def build_plan_change_rows(
     candidate_tasks: Sequence[Mapping[str, Any]],
     lot_code_by_id: Mapping[str, str],
 ) -> tuple[dict[str, Any], ...]:
-    """Show every LOT x process plan-window or priority change."""
+    """Show every LOT x process approved-plan or priority change."""
 
     current_by_key = {
         (str(row.get("lot_id")), str(row.get("routing_step_id"))): row
@@ -249,6 +249,106 @@ def build_plan_change_rows(
         )
     )
     return tuple(changes)
+
+
+def build_replan_impact_rows(
+    *,
+    approved_tasks: Sequence[Mapping[str, Any]],
+    current_forecast_rows: Sequence[Mapping[str, Any]],
+    candidate_tasks: Sequence[Mapping[str, Any]],
+    lot_code_by_id: Mapping[str, str],
+) -> tuple[dict[str, Any], ...]:
+    """Separate already-realized drift from the effect of a replan candidate.
+
+    Approved Plan -> current Forecast is execution drift already observed.
+    Current Forecast -> candidate is the actual change caused by replanning.
+    Only rows whose candidate schedule or priority differs from the current
+    Forecast/approved priority are returned.
+    """
+
+    approved_by_key = {
+        (str(row.get("lot_id")), str(row.get("routing_step_id"))): row
+        for row in approved_tasks
+        if row.get("lot_id") is not None and row.get("routing_step_id") is not None
+    }
+    forecast_by_key = {
+        (str(row.get("lot_id")), str(row.get("process_code"))): row
+        for row in current_forecast_rows
+        if row.get("lot_id") is not None and row.get("process_code") is not None
+    }
+
+    result: list[dict[str, Any]] = []
+    for candidate in candidate_tasks:
+        lot_id = candidate.get("lot_id")
+        routing_step_id = candidate.get("routing_step_id")
+        if lot_id is None or routing_step_id is None:
+            continue
+
+        approved_key = (str(lot_id), str(routing_step_id))
+        approved = approved_by_key.get(approved_key)
+        if approved is None:
+            continue
+        process_code = str(approved.get("process_code", routing_step_id))
+        forecast = forecast_by_key.get((str(lot_id), process_code), {})
+
+        approved_start = approved.get("target_start")
+        approved_end = approved.get("target_end")
+        forecast_start = forecast.get("forecast_start")
+        forecast_end = forecast.get("forecast_end")
+        candidate_start = candidate.get("target_start")
+        candidate_end = candidate.get("target_end")
+        approved_rank = approved.get("priority_rank")
+        candidate_rank = candidate.get("priority_rank")
+
+        replan_start_shift = _shift_minutes(forecast_start, candidate_start)
+        replan_end_shift = _shift_minutes(forecast_end, candidate_end)
+        rank_changed = approved_rank != candidate_rank
+        schedule_changed = (
+            replan_start_shift is None
+            or replan_end_shift is None
+            or abs(replan_start_shift) >= 0.01
+            or abs(replan_end_shift) >= 0.01
+        )
+        if not schedule_changed and not rank_changed:
+            continue
+
+        priority_movement = "유지"
+        if isinstance(approved_rank, int) and isinstance(candidate_rank, int):
+            if candidate_rank < approved_rank:
+                priority_movement = "앞당김"
+            elif candidate_rank > approved_rank:
+                priority_movement = "뒤로"
+
+        result.append(
+            {
+                "lot_id": str(lot_id),
+                "lot_code": lot_code_by_id.get(str(lot_id), str(lot_id)),
+                "routing_step_id": str(routing_step_id),
+                "process_code": process_code,
+                "approved_start": approved_start,
+                "approved_end": approved_end,
+                "forecast_start": forecast_start,
+                "forecast_end": forecast_end,
+                "candidate_start": candidate_start,
+                "candidate_end": candidate_end,
+                "realized_end_drift_minutes": _shift_minutes(approved_end, forecast_end),
+                "replan_end_effect_minutes": replan_end_shift,
+                "approved_rank": approved_rank,
+                "candidate_rank": candidate_rank,
+                "priority_movement": priority_movement,
+            }
+        )
+
+    result.sort(
+        key=lambda row: (
+            int(row["candidate_rank"])
+            if isinstance(row.get("candidate_rank"), int)
+            else 10**9,
+            str(row["lot_id"]),
+            str(row["routing_step_id"]),
+        )
+    )
+    return tuple(result)
 
 
 def build_priority_change_rows(
