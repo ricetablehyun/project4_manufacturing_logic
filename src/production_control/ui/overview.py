@@ -497,11 +497,11 @@ def _render_replan(
         readiness=view.readiness,
         gate_rows=view.gate_rows,
     )
-
     if status.readiness != "READY":
         st.session_state.pop("replan_snapshot", None)
         st.warning(
-            "현재 상태: 계산 대기 · 생산 완료 예상이 확정되지 않아 재계획 여부를 판단할 수 없습니다. "
+            "현재 상태: 계산 대기 · 생산 완료 예상이 확정되지 않아 "
+            "재계획 여부를 판단할 수 없습니다. "
             "현장 실적 입력에서 필요한 예상 잔여시간을 먼저 입력하세요."
         )
         return
@@ -519,7 +519,8 @@ def _render_replan(
         if status.slack_minutes is not None:
             st.caption(
                 f"{lot_code} {gate_name} 진입 여유는 "
-                f"{format_duration_minutes(status.slack_minutes)}입니다. 현재 승인계획을 유지합니다."
+                f"{format_duration_minutes(status.slack_minutes)}입니다. "
+                "현재 승인계획을 유지합니다."
             )
         return
 
@@ -681,7 +682,8 @@ def _render_replan(
             },
         )
         st.caption(
-            "우선순위 숫자는 LOT×공정 ScheduleTask 기준입니다. 개별 Unit 작업순서를 강제하는 값이 아닙니다."
+            "우선순위 숫자는 LOT×공정 ScheduleTask 기준입니다. "
+            "개별 Unit 작업순서를 강제하는 값이 아닙니다."
         )
     else:
         st.info("이 후보는 현재 승인계획 대비 LOT×공정 우선순위 변경이 없습니다.")
