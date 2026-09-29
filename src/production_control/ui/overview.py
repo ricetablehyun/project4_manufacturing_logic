@@ -572,8 +572,8 @@ def _render_replan(
             f"현재 상태: 긴급 · {lot_code} {gate_name} 진입 여유가 없어 재계획 검토가 필요합니다."
         )
     st.caption(
-        "이 상태에서만 FCFS / EDD / Slack / CR 후보를 동일한 생산조건으로 계산하고, "
-        "서버 KPI 기준으로 추천안을 고릅니다. 자동 적용하지 않습니다."
+        "FCFS / EDD / Slack / CR 네 후보를 모두 계산한 뒤 긴급납기 LOT 우선 정책을 "
+        "검증합니다. 정책을 통과한 후보끼리만 서버 KPI로 추천하며 자동 적용하지 않습니다."
     )
 
     if st.button("재계획 후보 계산", type="primary", use_container_width=True):
@@ -601,6 +601,11 @@ def _render_replan(
         for candidate in candidates
         if isinstance(candidate, dict) and candidate.get("candidate_id") is not None
     }
+    compliant_candidate_ids = [
+        candidate_id
+        for candidate_id, candidate in candidate_by_id.items()
+        if candidate.get("policy_compliant") is True
+    ]
 
     st.markdown("### 후보 비교")
     comparison_rows = []
@@ -608,9 +613,11 @@ def _render_replan(
         kpi = candidate.get("kpi", {})
         if not isinstance(kpi, dict):
             kpi = {}
+        compliant = candidate.get("policy_compliant") is True
         comparison_rows.append(
             {
                 "rule": priority_rule_label(candidate.get("rule")),
+                "policy_status": "정책 충족" if compliant else "승인 불가",
                 "recommended": "추천" if candidate_id == recommended else "",
                 "late_lot_count": kpi.get("late_lot_count"),
                 "total_tardiness": format_duration_minutes(
@@ -626,6 +633,7 @@ def _render_replan(
         hide_index=True,
         column_config={
             "rule": "우선순위 규칙",
+            "policy_status": "긴급납기 정책",
             "recommended": "시스템 추천",
             "late_lot_count": "지연 LOT 수",
             "total_tardiness": "총 지연시간",
@@ -633,9 +641,16 @@ def _render_replan(
         },
     )
     st.caption(
-        "후보 추천은 지연 LOT 수 → 총 지연시간 → 추가근무 → 계획 변경량 순으로 비교합니다. "
-        "현재 V1은 추가근무 capacity 후보를 아직 계산하지 않습니다."
+        "먼저 긴급납기 LOT 우선 정책을 검사하고, 통과 후보만 지연 LOT 수 → 총 지연시간 → "
+        "추가근무 → 계획 변경량 순으로 비교합니다. 현재 V1은 추가근무 capacity 후보를 "
+        "아직 계산하지 않습니다."
     )
+
+    if not compliant_candidate_ids:
+        st.error(
+            "현재 계산된 후보는 모두 긴급납기 운영정책을 위반해 승인할 수 없습니다. "
+            "현장 조건 또는 계획 입력을 다시 확인해야 합니다."
+        )
 
     candidate_ids = list(candidate_by_id)
     if recommended in candidate_by_id:
@@ -645,7 +660,12 @@ def _render_replan(
     def candidate_option_label(candidate_id: str) -> str:
         candidate = candidate_by_id[candidate_id]
         label = priority_rule_label(candidate.get("rule"))
-        return f"{label}{' · 시스템 추천' if candidate_id == recommended else ''}"
+        suffixes: list[str] = []
+        if candidate_id == recommended:
+            suffixes.append("시스템 추천")
+        if candidate.get("policy_compliant") is not True:
+            suffixes.append("정책 위반 · 승인 불가")
+        return f"{label}{' · ' + ' · '.join(suffixes) if suffixes else ''}"
 
     selected = st.selectbox(
         "검토할 후보",
@@ -654,6 +674,16 @@ def _render_replan(
         key="replan_candidate_selection",
     )
     selected_detail = candidate_by_id[selected]
+    selected_compliant = selected_detail.get("policy_compliant") is True
+    selected_violation_reason = selected_detail.get("policy_violation_reason")
+    if not selected_compliant:
+        reason_text = (
+            str(selected_violation_reason)
+            if selected_violation_reason
+            else "긴급납기 LOT 우선 운영정책을 충족하지 않습니다."
+        )
+        st.error(f"이 후보는 승인할 수 없습니다. {reason_text}")
+
     kpi = selected_detail.get("kpi", {})
     if not isinstance(kpi, dict):
         kpi = {}
@@ -750,7 +780,13 @@ def _render_replan(
         )
 
     st.caption(f"후보 계산 기준시각: {display_datetime(snapshot.get('as_of'))}")
-    if not st.button("선택한 재계획 승인", type="primary", use_container_width=True):
+    approval_clicked = st.button(
+        "선택한 재계획 승인",
+        type="primary",
+        use_container_width=True,
+        disabled=not selected_compliant,
+    )
+    if not approval_clicked:
         return
 
     candidate_as_of = parse_api_datetime(snapshot.get("as_of"))
