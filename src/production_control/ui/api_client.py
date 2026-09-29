@@ -155,6 +155,7 @@ class ProductionControlApiClient:
         station_code: str | None = None,
         worker_code: str | None = None,
         reason: str | None = None,
+        expected_hold_minutes: float | None = None,
     ) -> dict[str, Any]:
         payload = self._post_json(
             "/work-events",
@@ -166,6 +167,7 @@ class ProductionControlApiClient:
                 "station_code": station_code,
                 "worker_code": worker_code,
                 "reason": reason,
+                "expected_hold_minutes": expected_hold_minutes,
             },
         )
         if not isinstance(payload, dict):
