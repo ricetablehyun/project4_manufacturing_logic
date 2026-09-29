@@ -14,7 +14,6 @@ from production_control.ui.display_labels import (
     gate_type_label,
     priority_rule_label,
     process_label,
-    readiness_label,
     risk_label,
     status_label,
 )
@@ -36,7 +35,8 @@ from production_control.ui.operator_model import (
 )
 from production_control.ui.overview_model import build_overview_view
 from production_control.ui.replan_view_model import (
-    build_priority_change_rows,
+    build_plan_change_rows,
+    rank_replan_candidates,
     summarize_replan_status,
 )
 
@@ -98,6 +98,25 @@ def _process_forecast_text(row: dict[str, object]) -> str:
     if forecast_end in (None, "", "—"):
         return "계산 대기"
     return _compact_datetime(forecast_end)
+
+
+def _forecast_status_text(readiness: object) -> str:
+    text = str(readiness)
+    if text == "READY":
+        return "최신 실적 반영"
+    if text == "WAIT":
+        return "작업자 입력 대기"
+    return "상태 미확인"
+
+
+def _schedule_shift_text(value: object) -> str:
+    if not isinstance(value, (int, float)):
+        return "—"
+    minutes = float(value)
+    if abs(minutes) < 0.01:
+        return "변경 없음"
+    direction = "앞당김" if minutes < 0 else "늦어짐"
+    return f"{format_duration_minutes(abs(minutes))} {direction}"
 
 
 def _render_lot_detail(
@@ -225,13 +244,13 @@ def _render_overview(
 ) -> None:
     plan_col, readiness_col, urgent_col, warning_col, waiting_col = st.columns(5)
     plan_col.metric("현재 승인 계획", f"v{view.plan_version}")
-    readiness_col.metric("예상 일정 상태", readiness_label(view.readiness))
+    readiness_col.metric("Forecast 상태", _forecast_status_text(view.readiness))
     urgent_col.metric("긴급 LOT", view.urgent_lot_count)
     warning_col.metric("주의 LOT", view.warning_lot_count)
     waiting_col.metric("입력 대기 작업", view.waiting_operation_count)
 
     st.caption(
-        f"계획 ID: {view.plan_id} · 예상 일정 기준시각: {display_datetime(view.as_of)}"
+        f"계획 ID: {view.plan_id} · Forecast 기준시각: {display_datetime(view.as_of)}"
     )
 
     if view.readiness != "READY":
@@ -511,8 +530,8 @@ def _render_replan(
 ) -> None:
     st.subheader("재계획")
     st.caption(
-        "현재 실적을 반영한 생산 완료 예상이 검사 Gate에 미치는 영향을 먼저 확인하고, "
-        "긴급 상태에서만 재계획 후보를 비교·승인합니다."
+        "현재 실적을 반영한 Forecast가 검사 Gate에 미치는 영향을 확인하고, "
+        "납기 위험이 생기면 이후 남은 LOT×공정 일정을 다시 계산합니다."
     )
 
     status = summarize_replan_status(
@@ -522,7 +541,7 @@ def _render_replan(
     if status.readiness != "READY":
         st.session_state.pop("replan_snapshot", None)
         st.warning(
-            "현재 상태: 계산 대기 · 생산 완료 예상이 확정되지 않아 "
+            "현재 상태: Forecast 입력 대기 · 생산 완료 예상이 확정되지 않아 "
             "재계획 여부를 판단할 수 없습니다. "
             "현장 실적 입력에서 필요한 예상 잔여시간을 먼저 입력하세요."
         )
@@ -564,19 +583,22 @@ def _render_replan(
 
     if status.slack_minutes is not None and status.slack_minutes < 0:
         st.error(
-            f"현재 상태: 긴급 · {lot_code} {gate_name} 시작보다 생산 완료 예상이 "
+            f"현재 문제: {lot_code} 생산 완료 예상이 {gate_name} 시작보다 "
             f"{format_duration_minutes(abs(status.slack_minutes))} 늦습니다."
         )
     else:
         st.error(
-            f"현재 상태: 긴급 · {lot_code} {gate_name} 진입 여유가 없어 재계획 검토가 필요합니다."
+            f"현재 문제: {lot_code} {gate_name} 진입 여유가 없어 재계획 검토가 필요합니다."
         )
+
+    st.markdown("**재계획에서 바꾸는 것**")
     st.caption(
-        "FCFS / EDD / Slack / CR 네 후보를 모두 계산한 뒤 긴급납기 LOT 우선 정책을 "
-        "검증합니다. 정책을 통과한 후보끼리만 서버 KPI로 추천하며 자동 적용하지 않습니다."
+        "현재 RUNNING 작업은 중단하지 않습니다. 그 이후 남은 LOT×공정의 예상 시작·완료시각과 "
+        "우선순위를 FCFS / EDD / Slack / CR 네 방식으로 각각 다시 계산합니다. "
+        "긴급납기 LOT 우선 정책을 위반한 안은 비교는 하되 승인할 수 없습니다."
     )
 
-    if st.button("재계획 후보 계산", type="primary", use_container_width=True):
+    if st.button("4개 재계획안 계산·비교", type="primary", use_container_width=True):
         try:
             with ProductionControlApiClient(base_url=api_url) as client:
                 snapshot = client.create_replan_candidates(as_of=reference_time)
@@ -587,7 +609,10 @@ def _render_replan(
 
     snapshot = st.session_state.get("replan_snapshot")
     if not isinstance(snapshot, dict):
-        st.info("위 버튼을 누르면 현재 위험상태를 기준으로 재계획 후보를 계산합니다.")
+        st.info(
+            "버튼을 누르면 동일한 현재 상태에서 네 방법을 계산한 뒤, "
+            "납기성과가 좋은 결과부터 위에 정렬해 보여줍니다."
+        )
         return
 
     candidates = snapshot.get("candidates")
@@ -595,35 +620,94 @@ def _render_replan(
         st.info("현재 상태에서는 관리자 승인이 필요한 재계획 후보가 없습니다.")
         return
 
-    recommended = snapshot.get("recommended_candidate_id")
     candidate_by_id = {
         str(candidate.get("candidate_id")): candidate
         for candidate in candidates
         if isinstance(candidate, dict) and candidate.get("candidate_id") is not None
     }
+    ranked_candidates = rank_replan_candidates(
+        tuple(candidate_by_id.values())
+    )
+    ranking_by_id = {
+        str(row["candidate_id"]): row for row in ranked_candidates
+    }
     compliant_candidate_ids = [
-        candidate_id
-        for candidate_id, candidate in candidate_by_id.items()
-        if candidate.get("policy_compliant") is True
+        str(row["candidate_id"])
+        for row in ranked_candidates
+        if row["policy_compliant"] is True
     ]
 
-    st.markdown("### 후보 비교")
+    top_candidate_ids = [
+        str(row["candidate_id"])
+        for row in ranked_candidates
+        if row["policy_compliant"] is True and row["rank"] == 1
+    ]
+    if len(top_candidate_ids) == 1:
+        top_id = top_candidate_ids[0]
+        top = candidate_by_id[top_id]
+        top_kpi = top.get("kpi", {})
+        if not isinstance(top_kpi, dict):
+            top_kpi = {}
+        raw_top_tasks = top.get("tasks")
+        top_tasks = (
+            [task for task in raw_top_tasks if isinstance(task, dict)]
+            if isinstance(raw_top_tasks, list)
+            else []
+        )
+        top_changes = build_plan_change_rows(
+            current_tasks=plan_tasks,
+            candidate_tasks=top_tasks,
+            lot_code_by_id=lot_code_by_id,
+        )
+        st.success(
+            f"1순위 추천: {priority_rule_label(top.get('rule'))} · "
+            f"지연 LOT {top_kpi.get('late_lot_count', '—')} · "
+            f"총 지연 {format_duration_minutes(top_kpi.get('total_tardiness_minutes'))} · "
+            f"현재계획 대비 변경 공정 {len(top_changes)}개"
+        )
+    elif len(top_candidate_ids) > 1:
+        st.info(
+            f"상위 {len(top_candidate_ids)}개 후보가 D029 기준 공동 1위입니다. "
+            "현재 조건에서는 납기성과와 기존계획 변경량으로 우열을 가릴 수 없습니다."
+        )
+
+    st.markdown("### 재계획 대안 순위")
     comparison_rows = []
-    for candidate_id, candidate in candidate_by_id.items():
+    for ranked in ranked_candidates:
+        candidate_id = str(ranked["candidate_id"])
+        candidate = candidate_by_id[candidate_id]
         kpi = candidate.get("kpi", {})
         if not isinstance(kpi, dict):
             kpi = {}
-        compliant = candidate.get("policy_compliant") is True
+        raw_tasks = candidate.get("tasks")
+        tasks = (
+            [task for task in raw_tasks if isinstance(task, dict)]
+            if isinstance(raw_tasks, list)
+            else []
+        )
+        plan_changes = build_plan_change_rows(
+            current_tasks=plan_tasks,
+            candidate_tasks=tasks,
+            lot_code_by_id=lot_code_by_id,
+        )
+        if ranked["policy_compliant"] is True:
+            rank_number = int(ranked["rank"])
+            rank_text = f"공동 {rank_number}위" if ranked["tied"] else f"{rank_number}위"
+            policy_text = "정책 충족"
+        else:
+            rank_text = "순위 제외"
+            policy_text = "승인 불가"
         comparison_rows.append(
             {
+                "rank": rank_text,
                 "rule": priority_rule_label(candidate.get("rule")),
-                "policy_status": "정책 충족" if compliant else "승인 불가",
-                "recommended": "추천" if candidate_id == recommended else "",
+                "policy_status": policy_text,
                 "late_lot_count": kpi.get("late_lot_count"),
                 "total_tardiness": format_duration_minutes(
                     kpi.get("total_tardiness_minutes")
                 ),
-                "change_count": kpi.get("change_count"),
+                "changed_process_count": len(plan_changes),
+                "priority_change_count": kpi.get("change_count"),
             }
         )
 
@@ -632,18 +716,19 @@ def _render_replan(
         use_container_width=True,
         hide_index=True,
         column_config={
-            "rule": "우선순위 규칙",
+            "rank": "추천 순위",
+            "rule": "재계획 방법",
             "policy_status": "긴급납기 정책",
-            "recommended": "시스템 추천",
-            "late_lot_count": "지연 LOT 수",
+            "late_lot_count": "지연 LOT",
             "total_tardiness": "총 지연시간",
-            "change_count": "계획 변경 수",
+            "changed_process_count": "일정 변경 공정",
+            "priority_change_count": "우선순위 변경",
         },
     )
     st.caption(
-        "먼저 긴급납기 LOT 우선 정책을 검사하고, 통과 후보만 지연 LOT 수 → 총 지연시간 → "
-        "추가근무 → 계획 변경량 순으로 비교합니다. 현재 V1은 추가근무 capacity 후보를 "
-        "아직 계산하지 않습니다."
+        "순위는 별도 점수를 만들지 않고 기존 D029 기준을 그대로 사용합니다: "
+        "지연 LOT 수 → 총 지연시간 → 추가근무 → 우선순위 변경량. "
+        "정확히 같은 결과는 공동 순위로 표시합니다."
     )
 
     if not compliant_candidate_ids:
@@ -652,23 +737,20 @@ def _render_replan(
             "현장 조건 또는 계획 입력을 다시 확인해야 합니다."
         )
 
-    candidate_ids = list(candidate_by_id)
-    if recommended in candidate_by_id:
-        candidate_ids.remove(str(recommended))
-        candidate_ids.insert(0, str(recommended))
+    candidate_ids = [str(row["candidate_id"]) for row in ranked_candidates]
 
     def candidate_option_label(candidate_id: str) -> str:
         candidate = candidate_by_id[candidate_id]
+        ranked = ranking_by_id[candidate_id]
         label = priority_rule_label(candidate.get("rule"))
-        suffixes: list[str] = []
-        if candidate_id == recommended:
-            suffixes.append("시스템 추천")
-        if candidate.get("policy_compliant") is not True:
-            suffixes.append("정책 위반 · 승인 불가")
-        return f"{label}{' · ' + ' · '.join(suffixes) if suffixes else ''}"
+        if ranked["policy_compliant"] is not True:
+            return f"{label} · 정책 위반 · 승인 불가"
+        rank_number = int(ranked["rank"])
+        rank_text = f"공동 {rank_number}위" if ranked["tied"] else f"{rank_number}위"
+        return f"{rank_text} · {label}"
 
     selected = st.selectbox(
-        "검토할 후보",
+        "상세 확인할 재계획안",
         candidate_ids,
         format_func=candidate_option_label,
         key="replan_candidate_selection",
@@ -688,38 +770,49 @@ def _render_replan(
     if not isinstance(kpi, dict):
         kpi = {}
 
-    st.markdown("### 선택 후보의 예상 효과")
-    effect_col1, effect_col2, effect_col3 = st.columns(3)
-    effect_col1.metric("지연 LOT", kpi.get("late_lot_count", "—"))
-    effect_col2.metric(
-        "총 지연시간",
-        format_duration_minutes(kpi.get("total_tardiness_minutes")),
-    )
-    effect_col3.metric("기존 계획 변경", f"{kpi.get('change_count', '—')}건")
-
     raw_tasks = selected_detail.get("tasks")
     tasks = (
         [task for task in raw_tasks if isinstance(task, dict)]
         if isinstance(raw_tasks, list)
         else []
     )
-    changes = build_priority_change_rows(
+    plan_changes = build_plan_change_rows(
         current_tasks=plan_tasks,
         candidate_tasks=tasks,
         lot_code_by_id=lot_code_by_id,
     )
 
-    st.markdown("### 현재 계획에서 무엇이 바뀌나")
-    if changes:
+    st.markdown("### 선택안 적용 시 예상 결과")
+    effect_col1, effect_col2, effect_col3, effect_col4 = st.columns(4)
+    effect_col1.metric("지연 LOT", kpi.get("late_lot_count", "—"))
+    effect_col2.metric(
+        "총 지연시간",
+        format_duration_minutes(kpi.get("total_tardiness_minutes")),
+    )
+    effect_col3.metric("일정 변경 공정", f"{len(plan_changes)}개")
+    effect_col4.metric("우선순위 변경", f"{kpi.get('change_count', '—')}건")
+
+    st.markdown("### 현재 승인계획에서 이렇게 바뀝니다")
+    if plan_changes:
         change_rows = [
             {
                 "lot_code": row["lot_code"],
                 "process_code": process_label(row["process_code"]),
-                "current_rank": row["current_rank"],
-                "candidate_rank": row["candidate_rank"],
-                "movement": row["movement"],
+                "current_window": (
+                    f"{_compact_datetime(row['current_start'])} → "
+                    f"{_compact_datetime(row['current_end'])}"
+                ),
+                "candidate_window": (
+                    f"{_compact_datetime(row['candidate_start'])} → "
+                    f"{_compact_datetime(row['candidate_end'])}"
+                ),
+                "end_shift": _schedule_shift_text(row["end_shift_minutes"]),
+                "priority": (
+                    f"{row['current_rank']} → {row['candidate_rank']} "
+                    f"({row['priority_movement']})"
+                ),
             }
-            for row in changes
+            for row in plan_changes
         ]
         st.dataframe(
             change_rows,
@@ -728,23 +821,26 @@ def _render_replan(
             column_config={
                 "lot_code": "LOT",
                 "process_code": "공정",
-                "current_rank": "현재 우선순위",
-                "candidate_rank": "후보 우선순위",
-                "movement": "변경",
+                "current_window": "현재 계획",
+                "candidate_window": "재계획 후",
+                "end_shift": "완료시각 변화",
+                "priority": "우선순위 변화",
             },
         )
         st.caption(
-            "우선순위 숫자는 LOT×공정 ScheduleTask 기준입니다. "
-            "개별 Unit 작업순서를 강제하는 값이 아닙니다."
+            "재계획은 현재 RUNNING 작업을 끊지 않고 이후 남은 LOT×공정의 계획창과 "
+            "우선순위를 바꿉니다. 우선순위는 개별 Unit 작업순서를 강제하는 값이 아닙니다."
         )
     else:
-        st.info("이 후보는 현재 승인계획 대비 LOT×공정 우선순위 변경이 없습니다.")
+        st.info(
+            "이 방법은 현재 승인계획과 LOT×공정 시작·완료시각 및 우선순위가 동일합니다."
+        )
 
     current_by_key = {
         (str(task.get("lot_id")), str(task.get("routing_step_id"))): task
         for task in plan_tasks
     }
-    with st.expander("선택 후보 전체 계획 보기"):
+    with st.expander("선택안 전체 계획 보기"):
         task_rows = [
             {
                 "lot_code": lot_code_by_id.get(
@@ -773,15 +869,16 @@ def _render_replan(
             column_config={
                 "lot_code": "LOT",
                 "process_code": "공정",
-                "target_start": "후보 시작",
-                "target_end": "후보 완료",
+                "target_start": "재계획 시작",
+                "target_end": "재계획 완료",
                 "priority_rank": "우선순위",
             },
         )
 
     st.caption(f"후보 계산 기준시각: {display_datetime(snapshot.get('as_of'))}")
+    selected_rule = selected_detail.get("rule")
     approval_clicked = st.button(
-        "선택한 재계획 승인",
+        f"{priority_rule_label(selected_rule)} 재계획 승인",
         type="primary",
         use_container_width=True,
         disabled=not selected_compliant,
@@ -807,7 +904,6 @@ def _render_replan(
         return
 
     st.session_state.pop("replan_snapshot", None)
-    selected_rule = candidate_by_id[selected].get("rule")
     st.session_state["flash_message"] = (
         f"{priority_rule_label(selected_rule)} 승인 완료 · 새 승인계획 v{approval['version']}"
     )
