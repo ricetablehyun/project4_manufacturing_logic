@@ -122,6 +122,8 @@ class ReplanCandidateResponse(BaseModel):
     candidate_id: str
     rule: str
     kpi: CandidateKPIResponse
+    policy_compliant: bool
+    policy_violation_reason: str | None
     tasks: list[ReplanCandidateTaskResponse]
 
 
