@@ -41,6 +41,27 @@ def current_operation_for_unit(
     return min(candidates, key=lambda row: int(row.get("seq_no", 10**9)))
 
 
+def worker_expected_remaining_operation_ids(
+    operations: Sequence[Mapping[str, Any]],
+    *,
+    waiting_operation_ids: set[str],
+) -> set[str]:
+    """Return WAIT operations that a worker can actually resolve.
+
+    Forecast WAIT can also be caused by non-operator conditions such as an
+    exhausted aggregate work budget. D043/D069 worker residual input applies
+    only to a currently RUNNING operation, so WAITING/HOLD operations must not
+    be presented as worker actions.
+    """
+
+    return {
+        str(row.get("operation_id"))
+        for row in operations
+        if str(row.get("operation_id")) in waiting_operation_ids
+        and str(row.get("state")) == "RUNNING"
+    }
+
+
 def allowed_event_types(operation: Mapping[str, Any]) -> tuple[str, ...]:
     state = str(operation.get("state", ""))
     process_code = str(operation.get("process_code", ""))
