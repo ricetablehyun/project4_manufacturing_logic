@@ -577,7 +577,8 @@ def _render_replan(
         if status.slack_minutes is not None:
             st.caption(
                 f"{lot_code} {gate_name} 진입 여유는 "
-                f"{format_duration_minutes(status.slack_minutes)}입니다. 현재 승인계획을 유지합니다."
+                f"{format_duration_minutes(status.slack_minutes)}입니다. "
+                "현재 승인계획을 유지합니다."
             )
         return
 
