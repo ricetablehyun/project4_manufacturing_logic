@@ -9,7 +9,6 @@ import streamlit as st
 
 from production_control.ui.api_client import ApiClientError, ProductionControlApiClient
 from production_control.ui.display_labels import (
-    action_label,
     display_datetime,
     event_type_label,
     gate_type_label,
@@ -36,6 +35,10 @@ from production_control.ui.operator_model import (
     reason_required,
 )
 from production_control.ui.overview_model import build_overview_view
+from production_control.ui.replan_view_model import (
+    build_priority_change_rows,
+    summarize_replan_status,
+)
 
 _DEFAULT_API_URL = "http://127.0.0.1:8000"
 SEOUL = ZoneInfo("Asia/Seoul")
@@ -464,18 +467,93 @@ def _render_operator_input(
     st.rerun()
 
 
+def _candidate_process_code(
+    task: dict[str, object],
+    *,
+    current_by_key: dict[tuple[str, str], dict[str, object]],
+) -> object:
+    key = (str(task.get("lot_id")), str(task.get("routing_step_id")))
+    current = current_by_key.get(key)
+    if current is None:
+        return task.get("routing_step_id", "—")
+    return current.get("process_code", task.get("routing_step_id", "—"))
+
+
 def _render_replan(
     *,
     api_url: str,
     reference_time: datetime,
+    view: object,
+    plan_tasks: list[dict[str, object]],
+    lot_code_by_id: dict[str, str],
 ) -> None:
-    st.subheader("재계획 후보 비교 및 승인")
+    st.subheader("재계획")
     st.caption(
-        "현재 Forecast 위험도를 기준으로 FCFS / EDD / Slack / CR 후보를 서버에서 계산합니다. "
-        "긴급 상태가 아니면 후보를 만들지 않습니다."
+        "현재 실적을 반영한 생산 완료 예상이 검사 Gate에 미치는 영향을 먼저 확인하고, "
+        "긴급 상태에서만 재계획 후보를 비교·승인합니다."
     )
 
-    if st.button("현재 상태로 재계획 후보 계산", use_container_width=True):
+    status = summarize_replan_status(
+        readiness=view.readiness,
+        gate_rows=view.gate_rows,
+    )
+
+    if status.readiness != "READY":
+        st.session_state.pop("replan_snapshot", None)
+        st.warning(
+            "현재 상태: 계산 대기 · 생산 완료 예상이 확정되지 않아 재계획 여부를 판단할 수 없습니다. "
+            "현장 실적 입력에서 필요한 예상 잔여시간을 먼저 입력하세요."
+        )
+        return
+
+    lot_code = (
+        lot_code_by_id.get(status.lot_id, status.lot_id)
+        if status.lot_id is not None
+        else "해당 LOT"
+    )
+    gate_name = gate_type_label(status.gate_type) if status.gate_type else "검사 Gate"
+
+    if status.risk_level == "NORMAL":
+        st.session_state.pop("replan_snapshot", None)
+        st.success("현재 상태: 정상 · 재계획 필요 없음")
+        if status.slack_minutes is not None:
+            st.caption(
+                f"{lot_code} {gate_name} 진입 여유는 "
+                f"{format_duration_minutes(status.slack_minutes)}입니다. 현재 승인계획을 유지합니다."
+            )
+        return
+
+    if status.risk_level == "WARNING":
+        st.session_state.pop("replan_snapshot", None)
+        st.warning("현재 상태: 주의 · 공식계획은 유지하고 Forecast를 계속 감시합니다.")
+        if status.slack_minutes is not None:
+            st.caption(
+                f"{lot_code} {gate_name} 진입 여유는 "
+                f"{format_duration_minutes(status.slack_minutes)}입니다. "
+                "WARNING에서는 재계획 후보를 생성하지 않습니다."
+            )
+        return
+
+    if status.risk_level != "URGENT":
+        st.session_state.pop("replan_snapshot", None)
+        st.info("현재 Gate 위험도를 판단할 수 없어 재계획 후보를 생성하지 않습니다.")
+        return
+
+    if status.slack_minutes is not None and status.slack_minutes < 0:
+        st.error(
+            f"현재 상태: 긴급 · {lot_code} {gate_name} 시작보다 생산 완료 예상이 "
+            f"{format_duration_minutes(abs(status.slack_minutes))} 늦습니다."
+        )
+    else:
+        st.error(
+            f"현재 상태: 긴급 · {lot_code} {gate_name} 진입 여유가 없어 재계획 검토가 필요합니다."
+        )
+    st.caption(
+        "이 상태에서만 FCFS / EDD / Slack / CR 후보를 동일한 생산조건으로 계산하고, "
+        "서버 KPI 기준으로 추천안을 고릅니다. 자동 적용하지 않습니다."
+    )
+
+    if st.button("재계획 후보 계산", type="primary", use_container_width=True):
         try:
             with ProductionControlApiClient(base_url=api_url) as client:
                 snapshot = client.create_replan_candidates(as_of=reference_time)
@@ -486,94 +564,169 @@ def _render_replan(
 
     snapshot = st.session_state.get("replan_snapshot")
     if not isinstance(snapshot, dict):
-        st.info("필요할 때 위 버튼을 눌러 현재 상태의 재계획 후보를 계산합니다.")
+        st.info("위 버튼을 누르면 현재 위험상태를 기준으로 재계획 후보를 계산합니다.")
         return
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("현재 위험", risk_label(snapshot.get("risk_level")))
-    col2.metric("시스템 동작", action_label(snapshot.get("action")))
-    col3.metric("기준 계획", f"v{snapshot.get('parent_plan_version', '—')}")
-    recommended = snapshot.get("recommended_candidate_id")
-    col4.metric("추천 후보", priority_rule_label(recommended) if recommended else "없음")
-    st.caption(f"후보 계산 기준시각: {display_datetime(snapshot.get('as_of'))}")
 
     candidates = snapshot.get("candidates")
     if not isinstance(candidates, list) or not candidates:
         st.info("현재 상태에서는 관리자 승인이 필요한 재계획 후보가 없습니다.")
         return
 
-    rows = []
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
-            continue
+    recommended = snapshot.get("recommended_candidate_id")
+    candidate_by_id = {
+        str(candidate.get("candidate_id")): candidate
+        for candidate in candidates
+        if isinstance(candidate, dict) and candidate.get("candidate_id") is not None
+    }
+
+    st.markdown("### 후보 비교")
+    comparison_rows = []
+    for candidate_id, candidate in candidate_by_id.items():
         kpi = candidate.get("kpi", {})
         if not isinstance(kpi, dict):
             kpi = {}
-        candidate_id = str(candidate.get("candidate_id", ""))
-        rows.append(
+        comparison_rows.append(
             {
-                "candidate_id": candidate_id,
                 "rule": priority_rule_label(candidate.get("rule")),
                 "recommended": "추천" if candidate_id == recommended else "",
                 "late_lot_count": kpi.get("late_lot_count"),
-                "total_tardiness_minutes": kpi.get("total_tardiness_minutes"),
-                "overtime_minutes": kpi.get("overtime_minutes"),
+                "total_tardiness": format_duration_minutes(
+                    kpi.get("total_tardiness_minutes")
+                ),
                 "change_count": kpi.get("change_count"),
             }
         )
 
     st.dataframe(
-        rows,
+        comparison_rows,
         use_container_width=True,
         hide_index=True,
         column_config={
-            "candidate_id": "후보 ID",
             "rule": "우선순위 규칙",
-            "recommended": "추천",
+            "recommended": "시스템 추천",
             "late_lot_count": "지연 LOT 수",
-            "total_tardiness_minutes": "총 지각시간(분)",
-            "overtime_minutes": "초과근무(분)",
+            "total_tardiness": "총 지연시간",
             "change_count": "계획 변경 수",
         },
     )
     st.caption(
-        "V1의 초과근무 용량 모델은 아직 미구현이므로 overtime_minutes는 현재 비교에서 0입니다."
+        "후보 추천은 지연 LOT 수 → 총 지연시간 → 추가근무 → 계획 변경량 순으로 비교합니다. "
+        "현재 V1은 추가근무 capacity 후보를 아직 계산하지 않습니다."
     )
 
-    candidate_ids = [row["candidate_id"] for row in rows]
+    candidate_ids = list(candidate_by_id)
+    if recommended in candidate_by_id:
+        candidate_ids.remove(str(recommended))
+        candidate_ids.insert(0, str(recommended))
+
+    def candidate_option_label(candidate_id: str) -> str:
+        candidate = candidate_by_id[candidate_id]
+        label = priority_rule_label(candidate.get("rule"))
+        return f"{label}{' · 시스템 추천' if candidate_id == recommended else ''}"
+
     selected = st.selectbox(
-        "승인할 후보",
+        "검토할 후보",
         candidate_ids,
-        format_func=lambda value: (
-            f"{priority_rule_label(value)}{' · 추천' if value == recommended else ''}"
-        ),
+        format_func=candidate_option_label,
+        key="replan_candidate_selection",
     )
-    selected_detail = next(
-        (
-            candidate
-            for candidate in candidates
-            if isinstance(candidate, dict) and candidate.get("candidate_id") == selected
-        ),
-        None,
-    )
-    if isinstance(selected_detail, dict):
-        tasks = selected_detail.get("tasks")
-        if isinstance(tasks, list):
-            with st.expander("선택 후보 작업순서 보기"):
-                task_rows = [
-                    {
-                        "lot_id": task.get("lot_id"),
-                        "routing_step_id": task.get("routing_step_id"),
-                        "target_start": display_datetime(task.get("target_start")),
-                        "target_end": display_datetime(task.get("target_end")),
-                        "priority_rank": task.get("priority_rank"),
-                    }
-                    for task in tasks
-                    if isinstance(task, dict)
-                ]
-                st.dataframe(task_rows, use_container_width=True, hide_index=True)
+    selected_detail = candidate_by_id[selected]
+    kpi = selected_detail.get("kpi", {})
+    if not isinstance(kpi, dict):
+        kpi = {}
 
-    if not st.button("선택 후보 승인", type="primary", use_container_width=True):
+    st.markdown("### 선택 후보의 예상 효과")
+    effect_col1, effect_col2, effect_col3 = st.columns(3)
+    effect_col1.metric("지연 LOT", kpi.get("late_lot_count", "—"))
+    effect_col2.metric(
+        "총 지연시간",
+        format_duration_minutes(kpi.get("total_tardiness_minutes")),
+    )
+    effect_col3.metric("기존 계획 변경", f"{kpi.get('change_count', '—')}건")
+
+    raw_tasks = selected_detail.get("tasks")
+    tasks = (
+        [task for task in raw_tasks if isinstance(task, dict)]
+        if isinstance(raw_tasks, list)
+        else []
+    )
+    changes = build_priority_change_rows(
+        current_tasks=plan_tasks,
+        candidate_tasks=tasks,
+        lot_code_by_id=lot_code_by_id,
+    )
+
+    st.markdown("### 현재 계획에서 무엇이 바뀌나")
+    if changes:
+        change_rows = [
+            {
+                "lot_code": row["lot_code"],
+                "process_code": process_label(row["process_code"]),
+                "current_rank": row["current_rank"],
+                "candidate_rank": row["candidate_rank"],
+                "movement": row["movement"],
+            }
+            for row in changes
+        ]
+        st.dataframe(
+            change_rows,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "lot_code": "LOT",
+                "process_code": "공정",
+                "current_rank": "현재 우선순위",
+                "candidate_rank": "후보 우선순위",
+                "movement": "변경",
+            },
+        )
+        st.caption(
+            "우선순위 숫자는 LOT×공정 ScheduleTask 기준입니다. 개별 Unit 작업순서를 강제하는 값이 아닙니다."
+        )
+    else:
+        st.info("이 후보는 현재 승인계획 대비 LOT×공정 우선순위 변경이 없습니다.")
+
+    current_by_key = {
+        (str(task.get("lot_id")), str(task.get("routing_step_id"))): task
+        for task in plan_tasks
+    }
+    with st.expander("선택 후보 전체 계획 보기"):
+        task_rows = [
+            {
+                "lot_code": lot_code_by_id.get(
+                    str(task.get("lot_id")), str(task.get("lot_id"))
+                ),
+                "process_code": process_label(
+                    _candidate_process_code(task, current_by_key=current_by_key)
+                ),
+                "target_start": display_datetime(task.get("target_start")),
+                "target_end": display_datetime(task.get("target_end")),
+                "priority_rank": task.get("priority_rank"),
+            }
+            for task in sorted(
+                tasks,
+                key=lambda row: (
+                    int(row.get("priority_rank", 10**9)),
+                    str(row.get("lot_id", "")),
+                    str(row.get("routing_step_id", "")),
+                ),
+            )
+        ]
+        st.dataframe(
+            task_rows,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "lot_code": "LOT",
+                "process_code": "공정",
+                "target_start": "후보 시작",
+                "target_end": "후보 완료",
+                "priority_rank": "우선순위",
+            },
+        )
+
+    st.caption(f"후보 계산 기준시각: {display_datetime(snapshot.get('as_of'))}")
+    if not st.button("선택한 재계획 승인", type="primary", use_container_width=True):
         return
 
     candidate_as_of = parse_api_datetime(snapshot.get("as_of"))
@@ -594,8 +747,9 @@ def _render_replan(
         return
 
     st.session_state.pop("replan_snapshot", None)
+    selected_rule = candidate_by_id[selected].get("rule")
     st.session_state["flash_message"] = (
-        f"{priority_rule_label(selected)} 승인 완료 · 새 승인계획 v{approval['version']}"
+        f"{priority_rule_label(selected_rule)} 승인 완료 · 새 승인계획 v{approval['version']}"
     )
     st.rerun()
 
@@ -638,8 +792,7 @@ def run() -> None:
         if "lot_id" in row and "lot_code" in row
     }
     waiting_operation_ids = {
-        str(value)
-        for value in forecast.get("waiting_operation_ids", [])
+        str(value) for value in forecast.get("waiting_operation_ids", [])
     }
 
     section = st.radio(
@@ -660,7 +813,13 @@ def run() -> None:
             waiting_operation_ids=waiting_operation_ids,
         )
     else:
-        _render_replan(api_url=api_url, reference_time=reference_time)
+        _render_replan(
+            api_url=api_url,
+            reference_time=reference_time,
+            view=view,
+            plan_tasks=plan_tasks,
+            lot_code_by_id=lot_code_by_id,
+        )
 
 
 if __name__ == "__main__":
