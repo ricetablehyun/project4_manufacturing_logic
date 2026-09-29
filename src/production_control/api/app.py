@@ -125,6 +125,7 @@ def create_app(
                 received_at=datetime.now(UTC),
                 station_code=payload.station_code,
                 worker_code=payload.worker_code,
+                expected_hold_minutes=payload.expected_hold_minutes,
             )
         except ValueError as exc:
             session.rollback()
