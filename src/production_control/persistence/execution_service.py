@@ -1,6 +1,6 @@
 """Transactional WorkEvent persistence backed by the pure execution-state core."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from math import isfinite
 
 from sqlalchemy import func, select
@@ -172,6 +172,7 @@ def _create_next_rework_attempt(
     operation.current_attempt_no = next_attempt_no
     operation.state = OperationState.WAITING.value
     operation.eligible_at = eligible_at
+    operation.hold_until = None
     operation.expected_remaining_minutes = None
     return attempt
 
@@ -259,6 +260,7 @@ def persist_work_event(
     received_at: datetime,
     station_code: str | None = None,
     worker_code: str | None = None,
+    expected_hold_minutes: float | None = None,
 ) -> WorkEventApplyResult:
     """Apply and atomically persist one shop-floor WorkEvent."""
 
@@ -275,6 +277,12 @@ def persist_work_event(
         if existing.attempt_id != attempt.attempt_id:
             raise ValueError("event_id already belongs to a different WorkAttempt")
         return WorkEventApplyResult(snapshot=snapshot, duplicate=True)
+
+    if expected_hold_minutes is not None:
+        if expected_hold_minutes <= 0 or not isfinite(expected_hold_minutes):
+            raise ValueError("expected_hold_minutes must be finite and greater than 0")
+        if event.event_type is not WorkEventType.HOLD:
+            raise ValueError("expected_hold_minutes is only valid for HOLD")
 
     applied = apply_work_event(snapshot=snapshot, event=event)
 
@@ -293,6 +301,14 @@ def persist_work_event(
 
     operation.state = applied.snapshot.state.value
     operation.expected_remaining_minutes = None
+    if event.event_type is WorkEventType.HOLD:
+        operation.hold_until = (
+            event.occurred_at + timedelta(minutes=float(expected_hold_minutes))
+            if expected_hold_minutes is not None
+            else None
+        )
+    else:
+        operation.hold_until = None
     attempt.active_minutes = applied.snapshot.active_minutes
 
     if event.event_type is WorkEventType.START and attempt.started_at is None:
