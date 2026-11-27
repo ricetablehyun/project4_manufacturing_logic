@@ -228,6 +228,11 @@ def create_app(
             plan_id=snapshot.plan_id,
             version=snapshot.version,
             priority_rule=snapshot.priority_rule,
+            lot_priority_order=(
+                list(snapshot.lot_priority_order)
+                if snapshot.lot_priority_order is not None
+                else None
+            ),
             tasks=[
                 CurrentPlanTaskResponse(
                     lot_id=task.lot_id,

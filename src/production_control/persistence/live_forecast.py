@@ -29,7 +29,7 @@ from production_control.persistence.pace_snapshot import (
     load_lot_process_pace_forecasts,
 )
 from production_control.persistence.plan_dispatch import (
-    build_plan_ready_dispatch_provider,
+    build_approved_plan_dispatch_provider,
     load_plan_task_priorities,
 )
 from production_control.persistence.plan_lifecycle import load_current_approved_plan
@@ -183,9 +183,9 @@ def build_live_forecast(
         )
 
     item_tuple = tuple(items)
-    ready_dispatch_provider = build_plan_ready_dispatch_provider(
+    ready_dispatch_provider = build_approved_plan_dispatch_provider(
         session=session,
-        plan_id=current_plan.plan_id,
+        plan=current_plan,
         items=item_tuple,
     )
     calendar = load_work_calendar(session, config.calendar_id)

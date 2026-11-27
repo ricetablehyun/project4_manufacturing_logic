@@ -117,6 +117,7 @@ def approve_replan_candidate(
         approved_at=approved_at,
         selected_kpi=selected.kpi,
         tasks=drafts,
+        lot_priority_order=selected.lot_priority_order,
     )
 
     return ReplanApprovalResult(

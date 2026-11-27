@@ -18,24 +18,19 @@ from production_control.core.candidate_evaluator import (
     count_priority_rank_changes,
     select_candidate,
 )
-from production_control.core.dynamic_priority import (
-    DynamicLotPriorityState,
-    build_dynamic_priority_input,
-)
 from production_control.core.event_scheduler import (
-    DynamicPriorityProvider,
     EventDispatchInput,
     schedule_operations_event_driven,
 )
 from production_control.core.finite_scheduler import (
     OperationSpec,
-    ScheduledOperation,
     ScheduleResult,
 )
 from production_control.core.pace_scheduler_adapter import ForecastReadiness
 from production_control.core.priority_rules import (
     LotPriorityInput,
     PriorityRule,
+    rank_lots,
     resolve_deadline,
 )
 from production_control.core.replan_policy import ReplanAction
@@ -59,6 +54,7 @@ from production_control.persistence.models import InspectionGateRow, LotRow
 from production_control.persistence.pace_snapshot import load_lot_process_pace_forecasts
 from production_control.persistence.plan_dispatch import (
     PlanTaskPriority,
+    build_lot_order_ready_dispatch_provider,
     load_plan_task_priorities,
 )
 from production_control.persistence.plan_lifecycle import load_current_approved_plan
@@ -87,6 +83,7 @@ class PersistedReplanCandidate:
     tasks: tuple[ReplanCandidateTask, ...]
     policy_compliant: bool
     policy_violation_reason: str | None
+    lot_priority_order: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,51 +216,20 @@ def _static_priority_inputs(
     return tuple(result)
 
 
-def _dynamic_priority_provider(
+def _frozen_lot_order(
     *,
+    rule: PriorityRule,
+    static_priorities: tuple[LotPriorityInput, ...],
     lot_order: tuple[str, ...],
-    states: dict[str, _LotPriorityState],
-    calendar,
-) -> DynamicPriorityProvider:
-    def provider(
-        decision_time: datetime,
-        pending_operations: tuple[OperationSpec, ...],
-        scheduled_operations: tuple[ScheduledOperation, ...],
-    ) -> tuple[LotPriorityInput, ...]:
-        remaining = _remaining_minutes_by_lot(pending_operations)
-        for operation in scheduled_operations:
-            if operation.end <= decision_time:
-                continue
-            residual_minutes = calendar.working_minutes_between(
-                decision_time,
-                operation.end,
-            )
-            if residual_minutes > 0:
-                remaining[operation.lot_id] = (
-                    remaining.get(operation.lot_id, 0.0) + residual_minutes
-                )
+) -> tuple[str, ...]:
+    """Rank LOTs with ``rule`` at the candidate snapshot time.
 
-        result: list[LotPriorityInput] = []
-        for lot_id in lot_order:
-            remaining_minutes = remaining.get(lot_id)
-            if remaining_minutes is None or remaining_minutes <= 0:
-                continue
-            state = states[lot_id]
-            result.append(
-                build_dynamic_priority_input(
-                    state=DynamicLotPriorityState(
-                        lot_id=lot_id,
-                        release_at=state.release_at,
-                        deadline=state.deadline,
-                        remaining_work_minutes=remaining_minutes,
-                    ),
-                    decision_time=decision_time,
-                    calendar=calendar,
-                )
-            )
-        return tuple(result)
+    LOTs with no remaining work have no priority input; they keep plan order
+    after the ranked LOTs so the stored order still names every plan LOT.
+    """
 
-    return provider
+    ranked = tuple(lot.lot_id for lot in rank_lots(static_priorities, rule=rule))
+    return ranked + tuple(lot_id for lot_id in lot_order if lot_id not in ranked)
 
 
 def _candidate_tasks(
@@ -440,11 +406,6 @@ def build_replan_candidates(
         as_of=as_of,
         calendar=calendar,
     )
-    dynamic_provider = _dynamic_priority_provider(
-        lot_order=lot_order,
-        states=states,
-        calendar=calendar,
-    )
     urgent_lot_ids = {
         summary.lot_id
         for summary in live.result.lot_forecasts
@@ -454,14 +415,23 @@ def build_replan_candidates(
     built: dict[PriorityRule, PersistedReplanCandidate] = {}
 
     def candidate_builder(rule: PriorityRule) -> CandidateKPI:
+        # Every rule ranks LOTs once at ``as_of`` and the candidate is scheduled
+        # with that frozen order. The approved plan stores the same order and
+        # Live Forecast replays it, so the KPI a manager approves is the KPI the
+        # approved plan produces. (Slack/CR were previously re-ranked at every
+        # decision point, which an approved LOT x process rank list could not
+        # reproduce.)
+        frozen_order = _frozen_lot_order(
+            rule=rule,
+            static_priorities=static_priorities,
+            lot_order=lot_order,
+        )
         schedule = schedule_operations_event_driven(
             items=items,
             rule=rule,
             static_lot_priorities=static_priorities,
-            dynamic_priority_provider=(
-                dynamic_provider
-                if rule in (PriorityRule.SLACK, PriorityRule.CR)
-                else None
+            ready_dispatch_provider=build_lot_order_ready_dispatch_provider(
+                frozen_order
             ),
             resources=resources,
             calendar=calendar,
@@ -504,6 +474,7 @@ def build_replan_candidates(
             tasks=tasks,
             policy_compliant=policy.compliant,
             policy_violation_reason=policy.violation_reason,
+            lot_priority_order=frozen_order,
         )
         return kpi
 

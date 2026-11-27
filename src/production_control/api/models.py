@@ -100,6 +100,7 @@ class CurrentPlanResponse(BaseModel):
     version: int
     priority_rule: str
     tasks: list[CurrentPlanTaskResponse]
+    lot_priority_order: list[str] | None = None
 
 
 class CandidateKPIResponse(BaseModel):

@@ -32,6 +32,7 @@ class CurrentPlanSnapshot:
     version: int
     priority_rule: str
     tasks: tuple[CurrentPlanTask, ...]
+    lot_priority_order: tuple[str, ...] | None = None
 
 
 def load_current_plan_snapshot(*, session: Session) -> CurrentPlanSnapshot:
@@ -57,6 +58,9 @@ def load_current_plan_snapshot(*, session: Session) -> CurrentPlanSnapshot:
         plan_id=plan.plan_id,
         version=plan.version,
         priority_rule=plan.priority_rule,
+        lot_priority_order=(
+            tuple(plan.lot_priority_order) if plan.lot_priority_order else None
+        ),
         tasks=tuple(
             CurrentPlanTask(
                 lot_id=task.lot_id,

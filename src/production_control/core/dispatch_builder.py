@@ -92,3 +92,34 @@ def build_dispatch_sequence(
         sequence.extend(operation.operation_id for operation in ranked_operations)
 
     return tuple(sequence)
+
+
+def order_by_lot_priority(
+    *,
+    lot_order: collections.abc.Sequence[str],
+    operations: collections.abc.Iterable[OperationDispatchInput],
+) -> tuple[str, ...]:
+    """Order ready operations by a frozen LOT priority list.
+
+    This is the same ordering ``build_dispatch_sequence`` produces for a static
+    rule (LOT priority first, then the confirmed same-LOT tie-break), but with
+    the LOT order supplied explicitly. An approved replan stores that LOT order
+    so the plan that is executed is exactly the plan that was evaluated.
+    LOTs missing from ``lot_order`` keep caller order after the listed LOTs.
+    """
+
+    position = {lot_id: index for index, lot_id in enumerate(lot_order)}
+    if len(position) != len(tuple(lot_order)):
+        raise ValueError("lot_order must not contain duplicate LOT ids")
+    operation_list = list(operations)
+    fallback = len(position)
+    ranked = sorted(
+        operation_list,
+        key=lambda operation: (
+            position.get(operation.lot_id, fallback),
+            operation_tie_break_key(operation),
+            operation.operation_id,
+        ),
+    )
+    return tuple(operation.operation_id for operation in ranked)
+
