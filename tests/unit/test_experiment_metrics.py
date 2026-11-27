@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
@@ -154,3 +154,27 @@ def test_condition_disturbances_are_keyed_and_slow_down_on_average() -> None:
         held.true_minutes(unit_operation_id=op, attempt_no=1, standard_minutes=25) for op in ids
     ]
     assert ApprovalPolicy.KEEP.value == "KEEP"
+
+
+def test_interrupted_experiment_resumes_without_repeating_runs(tmp_path, monkeypatch) -> None:
+    import production_control.sim.experiment as experiment
+
+    executed: list = []
+
+    def fake_execute(spec):
+        executed.append(spec)
+        return replace(_row(spec.policy, spec.seed, 10.0), overtime=spec.overtime)
+
+    monkeypatch.setattr(experiment, "execute", fake_execute)
+    specs = plan_runs(
+        reps=1, conditions=["NORMAL"], policies=[ApprovalPolicy.KEEP, ApprovalPolicy.EDD]
+    )
+
+    experiment.run_experiment(specs[:2], out=tmp_path, workers=1, progress=False)
+    rows = experiment.run_experiment(specs, out=tmp_path, workers=1, progress=False)
+
+    assert executed == specs[:2] + specs[2:]
+    assert [(row.policy, row.overtime) for row in rows] == [
+        (spec.policy, spec.overtime) for spec in specs
+    ]
+    assert (tmp_path / "summary.csv").exists()
