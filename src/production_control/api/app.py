@@ -24,12 +24,14 @@ from production_control.api.models import (
     LotAdminResponse,
     LotForecastResponse,
     LotUpdateRequest,
+    OvertimeWindowResponse,
     ProcessForecastResponse,
     ReplanApprovalRequest,
     ReplanApprovalResponse,
     ReplanCandidateResponse,
     ReplanCandidatesResponse,
     ReplanCandidateTaskResponse,
+    WorkCalendarResponse,
     WorkEventRequest,
     WorkEventResponse,
     WorkOrderResponse,
@@ -49,6 +51,7 @@ from production_control.persistence.execution_service import (
     update_expected_remaining_minutes,
 )
 from production_control.persistence.live_forecast import LiveForecastConfig, build_live_forecast
+from production_control.persistence.mappers import load_work_calendar
 from production_control.persistence.models import WorkAttemptRow
 from production_control.persistence.plan_query import load_current_plan_snapshot
 from production_control.persistence.replan_approval import approve_replan_candidate
@@ -378,6 +381,30 @@ def create_app(
             status=row.status,
         )
 
+    @app.get("/work-calendar", response_model=WorkCalendarResponse)
+    def get_work_calendar(
+        session: Annotated[Session, Depends(get_session)],
+    ) -> WorkCalendarResponse:
+        """The plant calendar with approved overtime (D078)."""
+
+        config = require_forecast_config()
+        calendar = load_work_calendar(session, config.calendar_id)
+        return WorkCalendarResponse(
+            calendar_id=config.calendar_id,
+            timezone=calendar.timezone,
+            work_start=calendar.work_start,
+            work_end=calendar.work_end,
+            active_weekdays=sorted(calendar.active_weekdays),
+            overtime=[
+                OvertimeWindowResponse(
+                    day=day,
+                    start_at=calendar.regular_close(day),
+                    end_at=calendar.closing_time(day),
+                )
+                for day, _ in calendar.overtime
+            ],
+        )
+
     @app.get("/work-orders", response_model=WorkOrdersResponse)
     def get_work_orders(
         session: Annotated[Session, Depends(get_session)],
@@ -541,6 +568,8 @@ def create_app(
                     policy_compliant=candidate.policy_compliant,
                     policy_violation_reason=candidate.policy_violation_reason,
                     lot_priority_order=list(candidate.lot_priority_order),
+                    overtime_days=list(candidate.overtime_days),
+                    overtime_end=candidate.overtime_end,
                     tasks=[
                         ReplanCandidateTaskResponse(
                             lot_id=task.lot_id,

@@ -18,7 +18,12 @@ from sqlalchemy.orm import Session
 
 from production_control.core.candidate_evaluator import CandidateKPI
 from production_control.core.priority_rules import PriorityRule
-from production_control.persistence.models import SchedulePlanRow, ScheduleTaskRow
+from production_control.persistence.mappers import OVERTIME_EXCEPTION
+from production_control.persistence.models import (
+    CalendarExceptionRow,
+    SchedulePlanRow,
+    ScheduleTaskRow,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,8 +91,13 @@ def persist_approved_replan(
     selected_kpi: CandidateKPI,
     tasks: tuple[ApprovedPlanTaskDraft, ...],
     lot_priority_order: tuple[str, ...] | None = None,
+    overtime_windows: tuple[tuple[datetime, datetime], ...] = (),
+    calendar_id: str | None = None,
 ) -> SchedulePlanRow:
     """Persist one manager-approved replan as the next official version.
+
+    ``overtime_windows`` (D078) are committed in the same transaction as
+    approved plant-wide OVERTIME exceptions of ``calendar_id``.
 
     Candidate task values are supplied explicitly by the caller. This service
     intentionally does not infer target_qty or invent LOT x process tasks from
@@ -153,6 +163,21 @@ def persist_approved_replan(
                 target_end=task.target_end,
                 target_qty=task.target_qty,
                 priority_rank=task.priority_rank,
+            )
+        )
+
+    if overtime_windows and not calendar_id:
+        raise ValueError("overtime requires a calendar_id")
+    for start_at, end_at in overtime_windows:
+        session.add(
+            CalendarExceptionRow(
+                exception_id=f"OT::{plan_id}::{start_at.date().isoformat()}",
+                calendar_id=calendar_id,
+                resource_id=None,
+                start_at=start_at,
+                end_at=end_at,
+                exception_type=OVERTIME_EXCEPTION,
+                approval_status="APPROVED",
             )
         )
 

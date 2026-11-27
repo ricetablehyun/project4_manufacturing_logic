@@ -4,6 +4,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import select
+
 from production_control.persistence.database import (
     create_schema,
     create_session_factory,
@@ -11,7 +13,11 @@ from production_control.persistence.database import (
 )
 from production_control.persistence.fixture_seed import seed_f02_fixture
 from production_control.persistence.materialization import materialize_lot_execution
-from production_control.persistence.models import SchedulePlanRow, ScheduleTaskRow
+from production_control.persistence.models import (
+    InspectionGateRow,
+    SchedulePlanRow,
+    ScheduleTaskRow,
+)
 
 SEOUL = ZoneInfo("Asia/Seoul")
 F02_INTERNAL_STEPS = (
@@ -28,6 +34,7 @@ def build_f02_world(
     path: str | Path,
     *,
     baseline_lot_order: tuple[str, ...] = ("LOT-101", "LOT-102"),
+    gate_planned_at: dict[str, datetime] | None = None,
 ) -> Path:
     """F02 regression fixture (2 LOTs x 4 Units) with an explicit baseline order.
 
@@ -44,6 +51,11 @@ def build_f02_world(
         seed_f02_fixture(session)
         for lot_id in ("LOT-101", "LOT-102"):
             materialize_lot_execution(session=session, lot_id=lot_id)
+        for lot_id, planned_at in (gate_planned_at or {}).items():
+            gate = session.scalars(
+                select(InspectionGateRow).where(InspectionGateRow.lot_id == lot_id)
+            ).one()
+            gate.planned_at = planned_at
         session.add(
             SchedulePlanRow(
                 plan_id="PLAN-F02-BASELINE",

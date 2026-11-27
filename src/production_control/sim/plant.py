@@ -13,7 +13,7 @@ constraint audit of the plan the system issued.
 """
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from production_control.core.calendar_engine import WorkCalendar
@@ -89,6 +89,23 @@ class VirtualPlant:
     def __post_init__(self) -> None:
         if self.clock.tzinfo is None or self.clock.utcoffset() is None:
             raise ValueError("plant clock must be timezone-aware")
+
+    def set_calendar(self, calendar: WorkCalendar) -> None:
+        """Adopt newly approved working hours (D078 overtime).
+
+        Work already in progress keeps its remaining true working minutes and
+        now finishes on the new calendar, e.g. inside an opened overtime window.
+        """
+
+        for operation_id, running in list(self.running.items()):
+            remaining = self.calendar.working_minutes_between(self.clock, running.finishes_at)
+            self.running[operation_id] = replace(
+                running,
+                finishes_at=calendar.add_working_minutes(self.clock, remaining)
+                if remaining > 0
+                else running.finishes_at,
+            )
+        self.calendar = calendar
 
     # ------------------------------------------------------------------ time
     def advance_to(self, moment: datetime) -> None:
