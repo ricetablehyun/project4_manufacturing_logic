@@ -85,6 +85,7 @@ def persist_approved_replan(
     approved_at: datetime,
     selected_kpi: CandidateKPI,
     tasks: tuple[ApprovedPlanTaskDraft, ...],
+    lot_priority_order: tuple[str, ...] | None = None,
 ) -> SchedulePlanRow:
     """Persist one manager-approved replan as the next official version.
 
@@ -135,6 +136,9 @@ def persist_approved_replan(
         total_tardiness_minutes=selected_kpi.total_tardiness_minutes,
         overtime_minutes=selected_kpi.overtime_minutes,
         change_count=selected_kpi.change_count,
+        lot_priority_order=(
+            list(lot_priority_order) if lot_priority_order is not None else None
+        ),
     )
     session.add(plan)
 

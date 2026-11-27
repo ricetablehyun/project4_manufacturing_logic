@@ -6,6 +6,7 @@ import pytest
 from production_control.core.dispatch_builder import (
     OperationDispatchInput,
     build_dispatch_sequence,
+    order_by_lot_priority,
 )
 from production_control.core.priority_rules import LotPriorityInput, PriorityRule
 from production_control.domain.enums import OperationState
@@ -116,3 +117,33 @@ def test_operation_with_missing_priority_lot_is_rejected() -> None:
             ),
             rule=PriorityRule.FCFS,
         )
+
+
+def test_order_by_lot_priority_matches_static_rule_sequence() -> None:
+    base = datetime(2026, 10, 5, 9, tzinfo=SEOUL)
+    operations = [
+        OperationDispatchInput("B-U2", "LOT-B", "U2", OperationState.WAITING, base),
+        OperationDispatchInput("A-U1", "LOT-A", "U1", OperationState.WAITING, base),
+        OperationDispatchInput("B-U1", "LOT-B", "U1", OperationState.RUNNING, base),
+    ]
+    lots = [
+        LotPriorityInput(
+            lot_id="LOT-A",
+            release_at=base,
+            deadline=base.replace(day=9),
+            remaining_work_minutes=60,
+            time_until_deadline_minutes=600,
+        ),
+        LotPriorityInput(
+            lot_id="LOT-B",
+            release_at=base,
+            deadline=base.replace(day=7),
+            remaining_work_minutes=60,
+            time_until_deadline_minutes=300,
+        ),
+    ]
+
+    by_rule = build_dispatch_sequence(lots=lots, operations=operations, rule=PriorityRule.EDD)
+    frozen = order_by_lot_priority(lot_order=("LOT-B", "LOT-A"), operations=operations)
+
+    assert by_rule == frozen == ("B-U1", "B-U2", "A-U1")

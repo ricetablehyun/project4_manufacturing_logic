@@ -267,6 +267,10 @@ class SchedulePlanRow(Base):
     )
     overtime_minutes: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     change_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Frozen LOT priority order of an approved replan. When present, Live
+    # Forecast dispatch replays exactly this order (see plan_dispatch). The
+    # baseline plan keeps NULL and dispatches by ScheduleTask priority_rank.
+    lot_priority_order: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
 
 class ScheduleTaskRow(Base):

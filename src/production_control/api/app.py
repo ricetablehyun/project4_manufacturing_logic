@@ -1,6 +1,6 @@
 """Thin FastAPI boundary over persisted production-control services."""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import uuid4
@@ -32,6 +32,8 @@ from production_control.api.models import (
     ReplanCandidateTaskResponse,
     WorkEventRequest,
     WorkEventResponse,
+    WorkOrderResponse,
+    WorkOrdersResponse,
 )
 from production_control.core.execution_state import WorkEventInput
 from production_control.persistence.admin_management import (
@@ -40,6 +42,7 @@ from production_control.persistence.admin_management import (
     update_inspection_gate,
     update_lot,
 )
+from production_control.persistence.dispatch_orders import build_work_orders
 from production_control.persistence.execution_query import list_unit_operations
 from production_control.persistence.execution_service import (
     persist_work_event,
@@ -56,8 +59,20 @@ def create_app(
     *,
     session_factory: sessionmaker[Session],
     forecast_config: LiveForecastConfig | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> FastAPI:
-    """Create the API without inventing deployment-time database configuration."""
+    """Create the API without inventing deployment-time database configuration.
+
+    ``clock`` supplies server-side timestamps (WorkEvent received_at, approval
+    time, default ``as_of``). It defaults to the wall clock; the virtual plant
+    injects its simulated clock so server records stay on simulated time.
+    """
+
+    def now() -> datetime:
+        value = clock() if clock is not None else datetime.now(UTC)
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise RuntimeError("API clock must return timezone-aware datetimes")
+        return value
 
     app = FastAPI(title="Production Control API")
 
@@ -77,7 +92,7 @@ def create_app(
         return forecast_config
 
     def resolve_reference_time(as_of: datetime | None) -> datetime:
-        reference_time = as_of or datetime.now(UTC)
+        reference_time = as_of or now()
         if reference_time.tzinfo is None or reference_time.utcoffset() is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -122,7 +137,7 @@ def create_app(
                 session=session,
                 unit_operation_id=payload.unit_operation_id,
                 event=event,
-                received_at=datetime.now(UTC),
+                received_at=now(),
                 station_code=payload.station_code,
                 worker_code=payload.worker_code,
                 expected_hold_minutes=payload.expected_hold_minutes,
@@ -228,6 +243,11 @@ def create_app(
             plan_id=snapshot.plan_id,
             version=snapshot.version,
             priority_rule=snapshot.priority_rule,
+            lot_priority_order=(
+                list(snapshot.lot_priority_order)
+                if snapshot.lot_priority_order is not None
+                else None
+            ),
             tasks=[
                 CurrentPlanTaskResponse(
                     lot_id=task.lot_id,
@@ -358,6 +378,53 @@ def create_app(
             status=row.status,
         )
 
+    @app.get("/work-orders", response_model=WorkOrdersResponse)
+    def get_work_orders(
+        session: Annotated[Session, Depends(get_session)],
+        as_of: datetime | None = None,
+    ) -> WorkOrdersResponse:
+        """Operations the current approved plan starts at ``as_of``."""
+
+        config = require_forecast_config()
+        reference_time = resolve_reference_time(as_of)
+        try:
+            snapshot = build_work_orders(
+                session=session,
+                as_of=reference_time,
+                config=config,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+
+        return WorkOrdersResponse(
+            plan_id=snapshot.plan_id,
+            plan_version=snapshot.plan_version,
+            as_of=snapshot.as_of,
+            readiness=snapshot.readiness.value,
+            orders=[
+                WorkOrderResponse(
+                    unit_operation_id=order.unit_operation_id,
+                    attempt_id=order.attempt_id,
+                    lot_id=order.lot_id,
+                    unit_id=order.unit_id,
+                    unit_code=order.unit_code,
+                    process_code=order.process_code,
+                    routing_step_id=order.routing_step_id,
+                    resource_codes=list(order.resource_codes),
+                    planned_start=order.planned_start,
+                    planned_end=order.planned_end,
+                )
+                for order in snapshot.orders
+            ],
+            waiting_operation_ids=waiting_unit_operation_ids(
+                session, snapshot.waiting_operation_ids
+            ),
+            next_start_at=snapshot.next_start_at,
+        )
+
     @app.get("/forecast", response_model=LiveForecastResponse)
     def get_forecast(
         session: Annotated[Session, Depends(get_session)],
@@ -473,6 +540,7 @@ def create_app(
                     ),
                     policy_compliant=candidate.policy_compliant,
                     policy_violation_reason=candidate.policy_violation_reason,
+                    lot_priority_order=list(candidate.lot_priority_order),
                     tasks=[
                         ReplanCandidateTaskResponse(
                             lot_id=task.lot_id,
@@ -499,7 +567,7 @@ def create_app(
         session: Annotated[Session, Depends(get_session)],
     ) -> ReplanApprovalResponse:
         config = require_forecast_config()
-        approved_at = datetime.now(UTC)
+        approved_at = now()
         plan_id = f"REPLAN-{uuid4().hex}"
 
         try:

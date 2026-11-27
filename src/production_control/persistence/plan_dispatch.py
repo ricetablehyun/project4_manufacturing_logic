@@ -11,7 +11,10 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from production_control.core.dispatch_builder import operation_tie_break_key
+from production_control.core.dispatch_builder import (
+    operation_tie_break_key,
+    order_by_lot_priority,
+)
 from production_control.core.event_scheduler import (
     EventDispatchInput,
     ReadyDispatchProvider,
@@ -176,3 +179,46 @@ def build_current_plan_ready_dispatch_provider(
         plan_id=current.plan_id,
         items=items,
     )
+
+
+def build_lot_order_ready_dispatch_provider(
+    lot_order: tuple[str, ...],
+) -> ReadyDispatchProvider:
+    """Dispatch ready operations by one frozen LOT priority order."""
+
+    frozen = tuple(lot_order)
+
+    def provider(
+        _decision_time,
+        ready_items: tuple[EventDispatchInput, ...],
+    ) -> tuple[str, ...]:
+        return order_by_lot_priority(
+            lot_order=frozen,
+            operations=(item.dispatch for item in ready_items),
+        )
+
+    return provider
+
+
+def build_approved_plan_dispatch_provider(
+    *,
+    session: Session,
+    plan: SchedulePlanRow,
+    items: Iterable[EventDispatchInput],
+) -> ReadyDispatchProvider:
+    """Choose the dispatch provider that reproduces one approved plan.
+
+    An approved replan carries the frozen LOT order its candidate was evaluated
+    with; replaying that order makes the executed plan identical to the
+    evaluated candidate. The baseline plan has no frozen order and keeps the
+    persisted LOT x process priority_rank behavior.
+    """
+
+    if plan.lot_priority_order:
+        return build_lot_order_ready_dispatch_provider(tuple(plan.lot_priority_order))
+    return build_plan_ready_dispatch_provider(
+        session=session,
+        plan_id=plan.plan_id,
+        items=items,
+    )
+
