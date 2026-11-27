@@ -1,7 +1,7 @@
 """Factory for a FastAPI app backed by an explicitly initialized demo DB."""
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -19,8 +19,13 @@ def create_demo_app(
     path: str | Path = DEFAULT_DEMO_DB_PATH,
     *,
     clock: Callable[[], datetime] | None = None,
+    overtime_end: time | None = None,
 ) -> FastAPI:
-    """Bind the existing API to the local/demo SQLite database."""
+    """Bind the existing API to the local/demo SQLite database.
+
+    ``overtime_end`` (for example 19:00) lets replanning offer weekday overtime
+    candidates (D078). It is off by default, as in the midterm demo.
+    """
 
     database_path = Path(path)
     if not database_path.is_file():
@@ -37,6 +42,7 @@ def create_demo_app(
             calendar_id="CALENDAR-NORMAL",
             pace_min_samples=3,
             warning_threshold_minutes=120,
+            overtime_end=overtime_end,
         ),
         clock=clock,
     )

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 
 from production_control.ui.api_client import ApiClientError, ProductionControlApiClient
+from production_control.ui.charts import gantt_chart
 from production_control.ui.display_labels import (
     display_datetime,
     event_type_label,
@@ -16,6 +17,18 @@ from production_control.ui.display_labels import (
     process_label,
     risk_label,
     status_label,
+)
+from production_control.ui.experiment_view import render_experiment_results
+from production_control.ui.gantt_model import (
+    CANDIDATE_LAYER,
+    FORECAST_LAYER,
+    PLAN_LAYER,
+    forecast_bars,
+    gate_markers,
+    plan_bars,
+    plant_time,
+    records,
+    step_process_map,
 )
 from production_control.ui.lot_dashboard_model import (
     build_lot_progress,
@@ -41,7 +54,26 @@ from production_control.ui.replan_view_model import (
 )
 
 _DEFAULT_API_URL = "http://127.0.0.1:8000"
+_DEMO_TIME_ENV = "PRODUCTION_CONTROL_DEMO_TIME"
 SEOUL = ZoneInfo("Asia/Seoul")
+
+
+def demo_now() -> datetime:
+    """Wall clock, or a fixed demo time from ``PRODUCTION_CONTROL_DEMO_TIME``.
+
+    The demo data is dated October 2026; a recording made later would otherwise
+    see every LOT weeks late. A fixed time (e.g. 2026-10-22T13:17:00+09:00)
+    keeps Forecast and event defaults at the demo moment. Persisted events still
+    move the reference forward (see ``latest_execution_reference``).
+    """
+
+    configured = environ.get(_DEMO_TIME_ENV, "").strip()
+    if not configured:
+        return datetime.now(UTC)
+    parsed = datetime.fromisoformat(configured)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{_DEMO_TIME_ENV} must include a UTC offset, e.g. +09:00")
+    return parsed
 
 
 def _risk_text(value: object) -> str:
@@ -245,6 +277,9 @@ def _render_overview(
     view: object,
     operations: list[dict[str, object]],
     plan_tasks: list[dict[str, object]],
+    forecast: dict[str, object],
+    gates: list[dict[str, object]],
+    lot_code_by_id: dict[str, str],
 ) -> None:
     plan_col, readiness_col, urgent_col, warning_col, waiting_col = st.columns(5)
     plan_col.metric("현재 승인 계획", f"v{view.plan_version}")
@@ -262,6 +297,19 @@ def _render_overview(
         )
     if view.missing_gate_ids:
         st.warning("예상 일정 입력이 없는 검사 Gate: " + ", ".join(view.missing_gate_ids))
+
+    st.subheader("간트차트 · 승인 계획 vs 현재 Forecast")
+    st.caption(
+        "LOT×공정마다 위 막대는 승인 계획, 아래 막대는 현재 실적을 반영한 Forecast입니다. "
+        "검은 세로선은 검사 Gate 예정 시각, 점선은 Forecast 기준시각입니다."
+    )
+    _render_gantt(
+        bars=plan_bars(plan_tasks, lot_labels=lot_code_by_id)
+        + forecast_bars(forecast.get("processes", []), lot_labels=lot_code_by_id),
+        markers=gate_markers(gates, lot_labels=lot_code_by_id),
+        now=view.as_of,
+        layers=(PLAN_LAYER, FORECAST_LAYER),
+    )
 
     st.subheader("LOT 생산 현황")
     st.caption("LOT별 승인계획·현재 Forecast·납기위험과 실행상태를 확인합니다.")
@@ -428,7 +476,7 @@ def _render_operator_input(
         )
         return
 
-    suggested = default_event_time(operation, now=datetime.now(UTC)).astimezone(SEOUL)
+    suggested = default_event_time(operation, now=demo_now()).astimezone(SEOUL)
     with st.form(f"operator-event-form-{operation_id}", clear_on_submit=False):
         event_date = st.date_input(
             "발생 날짜",
@@ -519,6 +567,36 @@ def _candidate_process_code(
     return current.get("process_code", task.get("routing_step_id", "—"))
 
 
+def candidate_label(candidate: dict[str, object]) -> str:
+    """Rule label, plus the overtime window when the candidate opens one (D078)."""
+
+    label = priority_rule_label(candidate.get("rule"))
+    days = candidate.get("overtime_days") or []
+    if not days:
+        return label
+    end = str(candidate.get("overtime_end") or "")[:5]
+    day_text = ", ".join(str(day)[5:].replace("-", "/") for day in days)
+    return f"{label} + 추가근무(~{end}, {day_text})"
+
+
+def _render_gantt(
+    *,
+    bars: list,
+    markers: list,
+    now: object,
+    layers: tuple[str, str],
+) -> None:
+    if not bars:
+        st.info("표시할 남은 공정 일정이 없습니다.")
+        return
+    st.altair_chart(
+        gantt_chart(
+            records(bars), markers=records(markers), now=plant_time(now), layers=layers
+        ),
+        use_container_width=True,
+    )
+
+
 def _candidate_tasks(candidate: dict[str, object]) -> list[dict[str, object]]:
     raw_tasks = candidate.get("tasks")
     if not isinstance(raw_tasks, list):
@@ -548,6 +626,9 @@ def _render_replan(
     view: object,
     plan_tasks: list[dict[str, object]],
     lot_code_by_id: dict[str, str],
+    forecast: dict[str, object],
+    gates: list[dict[str, object]],
+    operations: list[dict[str, object]],
 ) -> None:
     st.subheader("재계획")
     st.caption(
@@ -612,10 +693,11 @@ def _render_replan(
     st.caption(
         "현재 RUNNING 작업은 중단하지 않습니다. 그 이후 남은 LOT×공정의 시작·완료 예상과 "
         "우선순위를 FCFS / EDD / Slack / CR 네 방식으로 다시 계산합니다. 긴급납기 LOT 우선 "
-        "정책을 위반한 안은 비교는 하되 승인할 수 없습니다."
+        "정책을 위반한 안은 비교는 하되 승인할 수 없습니다. 추가근무가 허용된 환경에서는 "
+        "각 방법에 평일 17~19시 추가근무안을 함께 계산합니다."
     )
 
-    if st.button("4개 재계획안 계산·비교", type="primary", use_container_width=True):
+    if st.button("재계획안 계산·비교", type="primary", use_container_width=True):
         try:
             with ProductionControlApiClient(base_url=api_url) as client:
                 snapshot = client.create_replan_candidates(as_of=reference_time)
@@ -627,7 +709,7 @@ def _render_replan(
     snapshot = st.session_state.get("replan_snapshot")
     if not isinstance(snapshot, dict):
         st.info(
-            "버튼을 누르면 같은 현재 상태에서 네 방법을 계산한 뒤 납기성과가 좋은 결과부터 "
+            "버튼을 누르면 같은 현재 상태에서 각 방법을 계산한 뒤 납기성과가 좋은 결과부터 "
             "정렬해 보여줍니다."
         )
         return
@@ -667,7 +749,7 @@ def _render_replan(
             lot_code_by_id=lot_code_by_id,
         )
         st.success(
-            f"1순위 추천: {priority_rule_label(top.get('rule'))} · "
+            f"1순위 추천: {candidate_label(top)} · "
             f"지연 LOT {top_kpi.get('late_lot_count', '—')} · "
             f"총 지연 {format_duration_minutes(top_kpi.get('total_tardiness_minutes'))} · "
             f"현재 Forecast 대비 일정변경 공정 {len(top_impacts)}개"
@@ -702,12 +784,13 @@ def _render_replan(
         comparison_rows.append(
             {
                 "rank": rank_text,
-                "rule": priority_rule_label(candidate.get("rule")),
+                "rule": candidate_label(candidate),
                 "policy_status": policy_text,
                 "late_lot_count": kpi.get("late_lot_count"),
                 "total_tardiness": format_duration_minutes(
                     kpi.get("total_tardiness_minutes")
                 ),
+                "overtime": format_duration_minutes(kpi.get("overtime_minutes")),
                 "changed_process_count": len(impacts),
                 "priority_change_count": kpi.get("change_count"),
             }
@@ -723,6 +806,7 @@ def _render_replan(
             "policy_status": "긴급납기 정책",
             "late_lot_count": "지연 LOT",
             "total_tardiness": "총 지연시간",
+            "overtime": "추가 가동시간",
             "changed_process_count": "Forecast 대비 일정변경 공정",
             "priority_change_count": "우선순위 변경",
         },
@@ -743,7 +827,7 @@ def _render_replan(
     def candidate_option_label(candidate_id: str) -> str:
         candidate = candidate_by_id[candidate_id]
         ranked = ranking_by_id[candidate_id]
-        label = priority_rule_label(candidate.get("rule"))
+        label = candidate_label(candidate)
         if ranked["policy_compliant"] is not True:
             return f"{label} · 정책 위반 · 승인 불가"
         rank_number = int(ranked["rank"])
@@ -779,14 +863,32 @@ def _render_replan(
     )
 
     st.markdown("### 선택안 적용 시 예상 결과")
-    effect_col1, effect_col2, effect_col3, effect_col4 = st.columns(4)
+    effect_col1, effect_col2, effect_col5, effect_col3, effect_col4 = st.columns(5)
     effect_col1.metric("지연 LOT", kpi.get("late_lot_count", "—"))
     effect_col2.metric(
         "총 지연시간",
         format_duration_minutes(kpi.get("total_tardiness_minutes")),
     )
+    effect_col5.metric("추가 가동시간", format_duration_minutes(kpi.get("overtime_minutes")))
     effect_col3.metric("Forecast 대비 일정변경", f"{len(impacts)}개")
     effect_col4.metric("우선순위 변경", f"{kpi.get('change_count', '—')}건")
+
+    st.markdown("### 간트차트 · 현재 Forecast vs 선택 재계획안")
+    st.caption(
+        "LOT×공정마다 위 막대는 현재 Forecast, 아래 막대는 이 후보를 승인했을 때의 일정입니다."
+    )
+    _render_gantt(
+        bars=forecast_bars(forecast.get("processes", []), lot_labels=lot_code_by_id)
+        + plan_bars(
+            tasks,
+            lot_labels=lot_code_by_id,
+            layer=CANDIDATE_LAYER,
+            step_process=step_process_map(operations),
+        ),
+        markers=gate_markers(gates, lot_labels=lot_code_by_id),
+        now=snapshot.get("as_of"),
+        layers=(FORECAST_LAYER, CANDIDATE_LAYER),
+    )
 
     st.markdown("### 승인계획 → 현재 Forecast → 재계획안")
     st.caption(
@@ -870,9 +972,8 @@ def _render_replan(
         )
 
     st.caption(f"후보 계산 기준시각: {display_datetime(snapshot.get('as_of'))}")
-    selected_rule = selected_detail.get("rule")
     approval_clicked = st.button(
-        f"{priority_rule_label(selected_rule)} 재계획 승인",
+        f"{candidate_label(selected_detail)} 재계획 승인",
         type="primary",
         use_container_width=True,
         disabled=not selected_compliant,
@@ -899,7 +1000,7 @@ def _render_replan(
 
     st.session_state.pop("replan_snapshot", None)
     st.session_state["flash_message"] = (
-        f"{priority_rule_label(selected_rule)} 승인 완료 · 새 승인계획 v{approval['version']}"
+        f"{candidate_label(selected_detail)} 승인 완료 · 새 승인계획 v{approval['version']}"
     )
     st.rerun()
 
@@ -913,6 +1014,11 @@ def run() -> None:
     api_url = st.sidebar.text_input("FastAPI 주소", value=configured_url)
     st.sidebar.caption("로컬 데모는 127.0.0.1에서만 실행하고 외부 포트를 열지 않습니다.")
     st.sidebar.button("새로고침", use_container_width=True)
+    if environ.get(_DEMO_TIME_ENV, "").strip():
+        st.sidebar.caption(
+            f"시연 기준시각 고정: {display_datetime(demo_now())} "
+            "(이후 입력한 실적 시각이 있으면 그 시각을 사용)"
+        )
 
     flash_message = st.session_state.pop("flash_message", None)
     if flash_message:
@@ -921,7 +1027,7 @@ def run() -> None:
     try:
         with ProductionControlApiClient(base_url=api_url) as client:
             operations = client.list_unit_operations()
-            reference_time = latest_execution_reference(operations, now=datetime.now(UTC))
+            reference_time = latest_execution_reference(operations, now=demo_now())
             forecast = client.get_forecast(as_of=reference_time)
             current_plan = client.get_current_plan()
             lots = client.list_lots()
@@ -944,14 +1050,21 @@ def run() -> None:
 
     section = st.radio(
         "화면",
-        ["생산현황", "현장 실적 입력", "재계획"],
+        ["생산현황", "현장 실적 입력", "재계획", "실험 결과"],
         horizontal=True,
         label_visibility="collapsed",
         key="main_section",
     )
 
     if section == "생산현황":
-        _render_overview(view=view, operations=operations, plan_tasks=plan_tasks)
+        _render_overview(
+            view=view,
+            operations=operations,
+            plan_tasks=plan_tasks,
+            forecast=forecast,
+            gates=gates,
+            lot_code_by_id=lot_code_by_id,
+        )
     elif section == "현장 실적 입력":
         _render_operator_input(
             api_url=api_url,
@@ -959,14 +1072,19 @@ def run() -> None:
             lot_code_by_id=lot_code_by_id,
             waiting_operation_ids=waiting_operation_ids,
         )
-    else:
+    elif section == "재계획":
         _render_replan(
             api_url=api_url,
             reference_time=reference_time,
             view=view,
             plan_tasks=plan_tasks,
             lot_code_by_id=lot_code_by_id,
+            forecast=forecast,
+            gates=gates,
+            operations=operations,
         )
+    else:
+        render_experiment_results()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,199 @@
+{
+  "bars": [
+    {
+      "lot_id": "LOT-101",
+      "lot_label": "LOT-001",
+      "process_code": "TUNING",
+      "process_label": "튜닝",
+      "layer": "현재 Forecast",
+      "start": "2026-10-22T13:00",
+      "end": "2026-10-22T13:15"
+    },
+    {
+      "lot_id": "LOT-101",
+      "lot_label": "LOT-001",
+      "process_code": "FINISH_ASSEMBLY",
+      "process_label": "마무리 조립",
+      "layer": "현재 Forecast",
+      "start": "2026-10-22T13:15",
+      "end": "2026-10-22T13:25"
+    },
+    {
+      "lot_id": "LOT-101",
+      "lot_label": "LOT-001",
+      "process_code": "FINAL_TEST",
+      "process_label": "최종 성능시험",
+      "layer": "현재 Forecast",
+      "start": "2026-10-22T13:25",
+      "end": "2026-10-22T13:55"
+    },
+    {
+      "lot_id": "LOT-102",
+      "lot_label": "LOT-002",
+      "process_code": "TUNING",
+      "process_label": "튜닝",
+      "layer": "현재 Forecast",
+      "start": "2026-10-22T13:20",
+      "end": "2026-10-26T09:50"
+    },
+    {
+      "lot_id": "LOT-102",
+      "lot_label": "LOT-002",
+      "process_code": "FINISH_ASSEMBLY",
+      "process_label": "마무리 조립",
+      "layer": "현재 Forecast",
+      "start": "2026-10-23T09:25",
+      "end": "2026-10-26T10:00"
+    },
+    {
+      "lot_id": "LOT-102",
+      "lot_label": "LOT-002",
+      "process_code": "FINAL_TEST",
+      "process_label": "최종 성능시험",
+      "layer": "현재 Forecast",
+      "start": "2026-10-23T11:55",
+      "end": "2026-10-27T13:15"
+    },
+    {
+      "lot_id": "LOT-103",
+      "lot_label": "LOT-003",
+      "process_code": "FINISH_ASSEMBLY",
+      "process_label": "마무리 조립",
+      "layer": "현재 Forecast",
+      "start": "2026-10-22T13:00",
+      "end": "2026-10-26T15:50"
+    },
+    {
+      "lot_id": "LOT-103",
+      "lot_label": "LOT-003",
+      "process_code": "FINAL_TEST",
+      "process_label": "최종 성능시험",
+      "layer": "현재 Forecast",
+      "start": "2026-10-22T14:25",
+      "end": "2026-10-28T12:15"
+    },
+    {
+      "lot_id": "LOT-103",
+      "lot_label": "LOT-003",
+      "process_code": "TUNING",
+      "process_label": "튜닝",
+      "layer": "현재 Forecast",
+      "start": "2026-10-26T10:00",
+      "end": "2026-10-26T14:10"
+    },
+    {
+      "lot_id": "LOT-101",
+      "lot_label": "LOT-001",
+      "process_code": "TUNING",
+      "process_label": "튜닝",
+      "layer": "재계획안",
+      "start": "2026-10-22T13:00",
+      "end": "2026-10-22T13:15"
+    },
+    {
+      "lot_id": "LOT-103",
+      "lot_label": "LOT-003",
+      "process_code": "FINAL_TEST",
+      "process_label": "최종 성능시험",
+      "layer": "재계획안",
+      "start": "2026-10-22T13:00",
+      "end": "2026-10-23T15:30"
+    },
+    {
+      "lot_id": "LOT-101",
+      "lot_label": "LOT-001",
+      "process_code": "FINISH_ASSEMBLY",
+      "process_label": "마무리 조립",
+      "layer": "재계획안",
+      "start": "2026-10-22T13:15",
+      "end": "2026-10-22T13:25"
+    },
+    {
+      "lot_id": "LOT-103",
+      "lot_label": "LOT-003",
+      "process_code": "FINISH_ASSEMBLY",
+      "process_label": "마무리 조립",
+      "layer": "재계획안",
+      "start": "2026-10-22T13:25",
+      "end": "2026-10-23T12:05"
+    },
+    {
+      "lot_id": "LOT-101",
+      "lot_label": "LOT-001",
+      "process_code": "FINAL_TEST",
+      "process_label": "최종 성능시험",
+      "layer": "재계획안",
+      "start": "2026-10-22T13:30",
+      "end": "2026-10-22T14:00"
+    },
+    {
+      "lot_id": "LOT-103",
+      "lot_label": "LOT-003",
+      "process_code": "TUNING",
+      "process_label": "튜닝",
+      "layer": "재계획안",
+      "start": "2026-10-22T14:15",
+      "end": "2026-10-23T11:55"
+    },
+    {
+      "lot_id": "LOT-102",
+      "lot_label": "LOT-002",
+      "process_code": "TUNING",
+      "process_label": "튜닝",
+      "layer": "재계획안",
+      "start": "2026-10-23T12:05",
+      "end": "2026-10-27T13:15"
+    },
+    {
+      "lot_id": "LOT-102",
+      "lot_label": "LOT-002",
+      "process_code": "FINISH_ASSEMBLY",
+      "process_label": "마무리 조립",
+      "layer": "재계획안",
+      "start": "2026-10-23T15:50",
+      "end": "2026-10-27T13:25"
+    },
+    {
+      "lot_id": "LOT-102",
+      "lot_label": "LOT-002",
+      "process_code": "FINAL_TEST",
+      "process_label": "최종 성능시험",
+      "layer": "재계획안",
+      "start": "2026-10-23T16:00",
+      "end": "2026-10-27T15:00"
+    }
+  ],
+  "markers": [
+    {
+      "lot_id": "LOT-101",
+      "lot_label": "LOT-001",
+      "label": "출하검사 예정",
+      "at": "2026-10-23T09:00"
+    },
+    {
+      "lot_id": "LOT-102",
+      "lot_label": "LOT-002",
+      "label": "출하검사 예정",
+      "at": "2026-11-06T09:00"
+    },
+    {
+      "lot_id": "LOT-103",
+      "lot_label": "LOT-003",
+      "label": "출하검사 예정",
+      "at": "2026-10-28T09:00"
+    }
+  ],
+  "now": "2026-10-22T13:00",
+  "candidate_id": "EDD",
+  "candidate_kpi": {
+    "late_lot_count": 0,
+    "total_tardiness_minutes": 0.0,
+    "overtime_minutes": 0.0,
+    "change_count": 8
+  },
+  "forecast_risk": {
+    "LOT-101": "NORMAL",
+    "LOT-102": "NORMAL",
+    "LOT-103": "URGENT"
+  }
+}
