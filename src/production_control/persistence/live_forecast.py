@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from production_control.core.event_scheduler import schedule_operations_event_driven
+from production_control.core.finite_scheduler import ScheduleResult
 from production_control.core.pace_scheduler_adapter import ForecastReadiness
 from production_control.core.priority_rules import PriorityRule
 from production_control.domain.enums import OperationState
@@ -65,6 +66,9 @@ class LiveForecastSnapshot:
     readiness: ForecastReadiness
     result: PersistedForecastResult | None
     waiting_operation_ids: tuple[str, ...] = ()
+    # Unit-level schedule behind ``result``; scheduler operation ids are
+    # WorkAttempt ids. Used to derive work orders from the approved plan.
+    schedule: ScheduleResult | None = None
 
 
 def _validate_as_of_against_current_state(
@@ -212,4 +216,5 @@ def build_live_forecast(
         as_of=as_of,
         readiness=result.readiness,
         result=result,
+        schedule=schedule,
     )

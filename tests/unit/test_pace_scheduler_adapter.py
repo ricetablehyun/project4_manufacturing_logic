@@ -151,7 +151,9 @@ def test_running_unit_below_pace_uses_rolling_chunk() -> None:
     assert result.signals[0].pace_overrun_minutes == 0
 
 
-def test_exhausted_budget_with_unfinished_units_stays_wait() -> None:
+def test_exhausted_budget_estimates_not_started_units_at_pace() -> None:
+    """D076: an exhausted budget must not leave Forecast in an unresolvable WAIT."""
+
     result = build_pace_schedule_inputs(
         forecast=forecast(cumulative_actual=100),
         units=(
@@ -160,9 +162,38 @@ def test_exhausted_budget_with_unfinished_units_stays_wait() -> None:
         ),
     )
 
-    assert result.readiness is ForecastReadiness.WAIT
-    assert result.items == ()
-    assert result.waiting_operation_ids == ("OP-1", "OP-2")
+    assert result.readiness is ForecastReadiness.READY
+    assert [item.operation.duration_minutes for item in result.items] == [25, 25]
+
+
+def test_running_unit_at_exact_pace_with_exhausted_budget_asks_worker() -> None:
+    """D076: share 0 at exactly Pace is resolved by the worker, like an overrun."""
+
+    pace = forecast(completed=[30, 20, 25], cumulative_actual=100)
+    assert pace.pace_minutes_per_unit == 25
+    assert pace.remaining_normal_work_minutes == 0
+
+    waiting = build_pace_schedule_inputs(
+        forecast=pace,
+        units=(unit("OP-4", "U04", state=OperationState.RUNNING, active_minutes=25),),
+    )
+    assert waiting.readiness is ForecastReadiness.WAIT
+    assert waiting.waiting_operation_ids == ("OP-4",)
+
+    answered = build_pace_schedule_inputs(
+        forecast=pace,
+        units=(
+            unit(
+                "OP-4",
+                "U04",
+                state=OperationState.RUNNING,
+                active_minutes=25,
+                expected_remaining_minutes=6,
+            ),
+        ),
+    )
+    assert answered.readiness is ForecastReadiness.READY
+    assert answered.items[0].operation.duration_minutes == 6
 
 
 def test_no_unfinished_units_and_zero_remaining_work_is_ready() -> None:

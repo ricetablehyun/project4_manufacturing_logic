@@ -126,6 +126,7 @@ class ReplanCandidateResponse(BaseModel):
     policy_compliant: bool
     policy_violation_reason: str | None
     tasks: list[ReplanCandidateTaskResponse]
+    lot_priority_order: list[str] = []
 
 
 class ReplanCandidatesResponse(BaseModel):
@@ -236,3 +237,27 @@ class InspectionGateUpdateRequest(BaseModel):
         if value is None:
             raise ValueError("InspectionGate status may not be null")
         return value
+
+
+class WorkOrderResponse(BaseModel):
+    unit_operation_id: str
+    attempt_id: str
+    lot_id: str
+    unit_id: str
+    unit_code: str
+    process_code: str
+    routing_step_id: str
+    resource_codes: list[str]
+    planned_start: datetime
+    planned_end: datetime
+
+
+class WorkOrdersResponse(BaseModel):
+    plan_id: str
+    plan_version: int
+    as_of: datetime
+    readiness: str
+    orders: list[WorkOrderResponse]
+    waiting_operation_ids: list[str]
+    next_start_at: datetime | None = None
+

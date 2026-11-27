@@ -10,6 +10,11 @@ This adapter implements the confirmed V1 boundary:
 - D031/D034: HOLD uses a manager-entered remaining-time override when present;
   otherwise it falls back to the RoutingStep standard time and exposes that
   fallback basis for the UI.
+- D076: when the rolling budget is exhausted (a Unit's equal share is 0), a
+  RUNNING Unit needs the worker's remaining-time estimate exactly as if it had
+  exceeded Pace, and a not-started Unit is estimated at the current Pace per
+  Unit. Before D076 an exhausted budget left Forecast in a WAIT that no worker
+  input could resolve, which stopped every work order in closed-loop runs.
 
 The adapter does not create rework operations. Confirmed rework remains a
 separate scheduling input.
@@ -235,15 +240,20 @@ def build_pace_schedule_inputs(
             )
         )
 
+        share = workload_by_unit[unit.unit_id]
         if unit.state is OperationState.HOLD:
             duration = hold_forecast_minutes
-        elif pace_overrun > 0:
+        elif unit.state is OperationState.RUNNING and (pace_overrun > 0 or share <= 0):
             if unit.expected_remaining_minutes is None:
                 waiting_operation_ids.append(unit.operation_id)
                 continue
             duration = unit.expected_remaining_minutes
+        elif share <= 0:
+            # D076: exhausted budget; a Unit that has not started still needs
+            # real work, estimated at the current LOT x process Pace.
+            duration = forecast.pace_minutes_per_unit
         else:
-            duration = workload_by_unit[unit.unit_id]
+            duration = share
 
         if duration <= 0:
             waiting_operation_ids.append(unit.operation_id)

@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from production_control.core.event_scheduler import EventDispatchInput
@@ -34,7 +34,7 @@ from production_control.persistence.models import (
 )
 from production_control.persistence.pace_snapshot import effective_attempt_active_minutes
 from production_control.persistence.rework_scheduler_adapter import (
-    build_waiting_rework_schedule_inputs,
+    build_rework_schedule_inputs,
     load_routing_step_requirements,
 )
 
@@ -78,6 +78,57 @@ def _started_routing_step_ids(
     return frozenset(rows)
 
 
+def _remaining_release_buffers(
+    *,
+    session: Session,
+    lot_id: str,
+    started_routing_step_ids: frozenset[str],
+) -> dict[str, int | None]:
+    """Return the transfer-buffer requirement still open for each buffered step.
+
+    A buffered step may start after K Units finished its previous internal
+    step. Live Forecast schedules only unfinished work, so upstream Units that
+    already finished before the snapshot must count toward K; otherwise the
+    scheduler waits for K *new* upstream completions that may no longer exist
+    and the Forecast deadlocks. A step that already started keeps no buffer.
+    """
+
+    steps = session.execute(
+        select(RoutingStepRow)
+        .join(UnitOperationRow, UnitOperationRow.routing_step_id == RoutingStepRow.routing_step_id)
+        .join(UnitRow, UnitOperationRow.unit_id == UnitRow.unit_id)
+        .where(UnitRow.lot_id == lot_id)
+        .distinct()
+    ).scalars().all()
+    internal = sorted(
+        (step for step in steps if step.duration_mode == "UNIT_TIME"),
+        key=lambda step: step.seq_no,
+    )
+
+    remaining: dict[str, int | None] = {}
+    for index, step in enumerate(internal):
+        if step.release_buffer_k is None or step.routing_step_id in started_routing_step_ids:
+            remaining[step.routing_step_id] = None
+            continue
+        if index == 0:
+            remaining[step.routing_step_id] = step.release_buffer_k
+            continue
+        previous = internal[index - 1]
+        finished_upstream = session.scalar(
+            select(func.count())
+            .select_from(UnitOperationRow)
+            .join(UnitRow, UnitOperationRow.unit_id == UnitRow.unit_id)
+            .where(
+                UnitRow.lot_id == lot_id,
+                UnitOperationRow.routing_step_id == previous.routing_step_id,
+                UnitOperationRow.state == OperationState.COMPLETED.value,
+            )
+        )
+        still_needed = step.release_buffer_k - int(finished_upstream or 0)
+        remaining[step.routing_step_id] = still_needed if still_needed > 0 else None
+    return remaining
+
+
 def _normal_input_from_projection(
     *,
     session: Session,
@@ -85,7 +136,7 @@ def _normal_input_from_projection(
     unit: UnitRow,
     projection: UnitExecutionProjection,
     as_of: datetime | None,
-    started_routing_step_ids: frozenset[str],
+    remaining_release_buffers: dict[str, int | None],
 ) -> tuple[UnitPaceSchedulingInput, ...]:
     inputs: list[UnitPaceSchedulingInput] = []
 
@@ -133,9 +184,9 @@ def _normal_input_from_projection(
             eligible_at = max(eligible_at, operation.hold_until)
             release_at = max(release_at, operation.hold_until)
 
-        release_buffer_k = step.release_buffer_k
-        if step.routing_step_id in started_routing_step_ids:
-            release_buffer_k = None
+        release_buffer_k = remaining_release_buffers.get(
+            step.routing_step_id, step.release_buffer_k
+        )
 
         inputs.append(
             UnitPaceSchedulingInput(
@@ -199,6 +250,11 @@ def build_internal_lot_forecast_inputs(
         raise ValueError(f"LOT has no Units: {lot_id}")
 
     started_step_ids = _started_routing_step_ids(session=session, lot_id=lot_id)
+    remaining_release_buffers = _remaining_release_buffers(
+        session=session,
+        lot_id=lot_id,
+        started_routing_step_ids=started_step_ids,
+    )
     projections: list[UnitExecutionProjection] = []
     normal_inputs: list[UnitPaceSchedulingInput] = []
 
@@ -215,7 +271,7 @@ def build_internal_lot_forecast_inputs(
                 unit=unit,
                 projection=projection,
                 as_of=as_of,
-                started_routing_step_ids=started_step_ids,
+                remaining_release_buffers=remaining_release_buffers,
             )
         )
 
@@ -250,13 +306,23 @@ def build_internal_lot_forecast_inputs(
         )
 
     rework_items: list[EventDispatchInput] = []
+    rework_waiting: list[str] = []
     for projection in projections:
-        rework_items.extend(
-            build_waiting_rework_schedule_inputs(
-                session=session,
-                projection=projection,
-                pace_by_process=pace_by_process,
-            )
+        rework = build_rework_schedule_inputs(
+            session=session,
+            projection=projection,
+            pace_by_process=pace_by_process,
+            as_of=as_of,
+        )
+        rework_items.extend(rework.items)
+        rework_waiting.extend(rework.waiting_operation_ids)
+
+    if rework_waiting:
+        return PersistedForecastInputBundle(
+            readiness=ForecastReadiness.WAIT,
+            items=(),
+            waiting_operation_ids=tuple(sorted(set(rework_waiting))),
+            signals=tuple(signals),
         )
 
     items = tuple(

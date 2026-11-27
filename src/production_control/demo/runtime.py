@@ -1,5 +1,7 @@
 """Factory for a FastAPI app backed by an explicitly initialized demo DB."""
 
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -13,7 +15,11 @@ from production_control.persistence.database import (
 from production_control.persistence.live_forecast import LiveForecastConfig
 
 
-def create_demo_app(path: str | Path = DEFAULT_DEMO_DB_PATH) -> FastAPI:
+def create_demo_app(
+    path: str | Path = DEFAULT_DEMO_DB_PATH,
+    *,
+    clock: Callable[[], datetime] | None = None,
+) -> FastAPI:
     """Bind the existing API to the local/demo SQLite database."""
 
     database_path = Path(path)
@@ -32,6 +38,7 @@ def create_demo_app(path: str | Path = DEFAULT_DEMO_DB_PATH) -> FastAPI:
             pace_min_samples=3,
             warning_threshold_minutes=120,
         ),
+        clock=clock,
     )
     app.state.demo_database_path = database_path
     app.state.demo_engine = engine
