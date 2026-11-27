@@ -65,7 +65,8 @@ def test_default_event_time_uses_last_event_plus_ten_minutes() -> None:
         "eligible_at": dt(8).isoformat(),
     }
 
-    assert default_event_time(operation) == dt(9, 10)
+    # Inject the clock so the expectation does not depend on the wall-clock date.
+    assert default_event_time(operation, now=dt(8, 30)) == dt(9, 10)
 
 
 def test_latest_execution_reference_never_predates_latest_event() -> None:

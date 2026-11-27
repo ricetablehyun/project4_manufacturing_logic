@@ -10,3 +10,4 @@ htmlcov/
 *.db
 *.sqlite3
 .env
+*.egg-info/
