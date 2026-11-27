@@ -53,7 +53,13 @@ from production_control.persistence.live_forecast import (
     build_live_forecast,
 )
 from production_control.persistence.mappers import load_active_resources, load_work_calendar
-from production_control.persistence.models import InspectionGateRow, LotRow
+from production_control.persistence.models import (
+    InspectionGateRow,
+    LotRow,
+    RoutingStepRow,
+    UnitOperationRow,
+    UnitRow,
+)
 from production_control.persistence.pace_snapshot import load_lot_process_pace_forecasts
 from production_control.persistence.plan_dispatch import (
     PlanTaskPriority,
@@ -237,6 +243,19 @@ def _frozen_lot_order(
     return ranked + tuple(lot_id for lot_id in lot_order if lot_id not in ranked)
 
 
+def _routing_step_id(session: Session, *, lot_id: str, step_seq: int) -> str:
+    step_id = session.scalar(
+        select(RoutingStepRow.routing_step_id)
+        .join(UnitOperationRow, UnitOperationRow.routing_step_id == RoutingStepRow.routing_step_id)
+        .join(UnitRow, UnitOperationRow.unit_id == UnitRow.unit_id)
+        .where(UnitRow.lot_id == lot_id, RoutingStepRow.seq_no == step_seq)
+        .limit(1)
+    )
+    if step_id is None:
+        raise ValueError(f"LOT has no routing step with seq {step_seq}: {lot_id}")
+    return step_id
+
+
 def _candidate_tasks(
     *,
     session: Session,
@@ -252,21 +271,25 @@ def _candidate_tasks(
 
     for operation in schedule.operations:
         key = (operation.lot_id, operation.step_seq, operation.process_code)
-        if key not in priority_by_key:
-            raise ValueError(
-                "candidate operation has no matching task in the current approved plan: "
-                f"{operation.operation_id} / {key}"
-            )
         if key not in grouped:
             grouped[key] = []
             dispatch_order.append(key)
         grouped[key].append(operation)
 
+    # A step can reappear after the current plan was approved without it: a
+    # FINAL_TEST failure reopens TUNING (and the retest) of a LOT whose steps
+    # had all finished. Such reopened steps have no parent task; they receive
+    # new ranks after the parent's slots and stay out of change_count, which
+    # compares only tasks both plans contain.
     active_parent_priorities = sorted(
-        (priority_by_key[key] for key in dispatch_order),
+        (priority_by_key[key] for key in dispatch_order if key in priority_by_key),
         key=lambda item: (item.priority_rank, item.technical_order),
     )
     rank_slots = [item.priority_rank for item in active_parent_priorities]
+    next_rank = max((item.priority_rank for item in parent_priorities), default=0)
+    while len(rank_slots) < len(dispatch_order):
+        next_rank += 1
+        rank_slots.append(next_rank)
     candidate_rank_by_key = {
         key: rank_slots[index]
         for index, key in enumerate(dispatch_order)
@@ -282,8 +305,8 @@ def _candidate_tasks(
 
     tasks: list[ReplanCandidateTask] = []
     for key in dispatch_order:
-        lot_id, _step_seq, process_code = key
-        parent = priority_by_key[key]
+        lot_id, step_seq, process_code = key
+        parent = priority_by_key.get(key)
         operations = grouped[key]
         lot = session.get(LotRow, lot_id)
         if lot is None:
@@ -293,7 +316,11 @@ def _candidate_tasks(
         tasks.append(
             ReplanCandidateTask(
                 lot_id=lot_id,
-                routing_step_id=parent.routing_step_id,
+                routing_step_id=(
+                    parent.routing_step_id
+                    if parent is not None
+                    else _routing_step_id(session, lot_id=lot_id, step_seq=step_seq)
+                ),
                 target_start=min(operation.start for operation in operations),
                 target_end=max(operation.end for operation in operations),
                 target_qty=lot.quantity,
@@ -301,6 +328,8 @@ def _candidate_tasks(
             )
         )
 
+        if parent is None:
+            continue
         # D024 permits the Frozen Horizon to be released for URGENT immediate
         # replanning. D056 only builds candidates after that URGENT boundary,
         # so the active candidate comparison set is intentionally unfrozen.

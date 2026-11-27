@@ -48,7 +48,7 @@ import sys
 import tempfile
 import time as wall_time
 from collections.abc import Iterable, Sequence
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, time
 from pathlib import Path
@@ -409,31 +409,50 @@ def run_experiment(
     rows: list[RunRow] = [done[spec] for spec in specs if spec in done]
     if progress and done:
         print(f"resuming: {len(rows)} of {len(specs)} runs already finished", flush=True)
-    if workers <= 1:
-        iterator = map(execute, todo)
-        pool = None
-    else:
-        pool = ProcessPoolExecutor(max_workers=workers)
-        iterator = pool.map(execute, todo)
-    try:
-        with journal.open("a", encoding="utf-8") as handle:
-            for row in iterator:
-                rows.append(row)
-                handle.write(json.dumps(asdict(row)) + "\n")
-                handle.flush()
-                if progress:
-                    print(
-                        f"[{len(rows)}/{len(specs)}] {row.condition}/{row.policy}"
-                        f"{'+OT' if row.overtime else ''}/s{row.seed} "
-                        f"gate_delay={row.gate_delay_minutes:.0f} "
-                        f"due_tardy={row.due_tardiness_minutes:.0f} "
-                        f"ot={row.overtime_minutes:.0f} ({row.wall_seconds:.0f}s)",
-                        flush=True,
-                    )
-    finally:
-        if pool is not None:
-            pool.shutdown()
+    failures: list[dict[str, object]] = []
 
+    def record(row: RunRow, handle) -> None:
+        rows.append(row)
+        handle.write(json.dumps(asdict(row)) + "\n")
+        handle.flush()
+        if progress:
+            print(
+                f"[{len(rows)}/{len(specs)}] {row.condition}/{row.policy}"
+                f"{'+OT' if row.overtime else ''}/s{row.seed} "
+                f"gate_delay={row.gate_delay_minutes:.0f} "
+                f"due_tardy={row.due_tardiness_minutes:.0f} "
+                f"ot={row.overtime_minutes:.0f} ({row.wall_seconds:.0f}s)",
+                flush=True,
+            )
+
+    def fail(spec: RunSpec, error: BaseException) -> None:
+        # A failed run is a finding, not noise: it is written down and the
+        # experiment exits non-zero, but the remaining runs still execute.
+        failures.append({**asdict(spec), "error": f"{type(error).__name__}: {error}"})
+        if progress:
+            print(f"FAILED {spec.label}: {error}", flush=True)
+
+    with journal.open("a", encoding="utf-8") as handle:
+        if workers <= 1:
+            for spec in todo:
+                try:
+                    row = execute(spec)
+                except Exception as error:
+                    fail(spec, error)
+                else:
+                    record(row, handle)
+        else:
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(execute, spec): spec for spec in todo}
+                for future in as_completed(futures):
+                    try:
+                        row = future.result()
+                    except Exception as error:
+                        fail(futures[future], error)
+                    else:
+                        record(row, handle)
+
+    (out / "failures.json").write_text(json.dumps(failures, indent=2), encoding="utf-8")
     order = {spec: index for index, spec in enumerate(specs)}
     rows.sort(key=lambda row: order[RunSpec(row.condition, row.policy, row.overtime, row.seed)])
     _write_csv(out / "runs.csv", [asdict(row) for row in rows])
@@ -491,8 +510,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     rows = run_experiment(specs, out=args.out, workers=args.workers)
     violations = sum(row.violations for row in rows)
-    print(f"{len(rows)} runs written to {args.out} ({violations} plant violations)")
-    return 1 if violations else 0
+    failures = json.loads((args.out / "failures.json").read_text(encoding="utf-8"))
+    print(
+        f"{len(rows)} runs written to {args.out} "
+        f"({violations} plant violations, {len(failures)} failed runs)"
+    )
+    return 1 if violations or failures else 0
 
 
 if __name__ == "__main__":

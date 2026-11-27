@@ -178,3 +178,26 @@ def test_interrupted_experiment_resumes_without_repeating_runs(tmp_path, monkeyp
         (spec.policy, spec.overtime) for spec in specs
     ]
     assert (tmp_path / "summary.csv").exists()
+
+
+def test_a_failed_run_is_recorded_and_the_rest_still_run(tmp_path, monkeypatch) -> None:
+    import json
+
+    import production_control.sim.experiment as experiment
+
+    def flaky_execute(spec):
+        if spec.policy == "EDD" and not spec.overtime:
+            raise RuntimeError("boom")
+        return replace(_row(spec.policy, spec.seed, 10.0), overtime=spec.overtime)
+
+    monkeypatch.setattr(experiment, "execute", flaky_execute)
+    specs = plan_runs(
+        reps=1, conditions=["NORMAL"], policies=[ApprovalPolicy.KEEP, ApprovalPolicy.EDD]
+    )
+
+    rows = experiment.run_experiment(specs, out=tmp_path, workers=1, progress=False)
+
+    assert len(rows) == len(specs) - 1
+    failures = json.loads((tmp_path / "failures.json").read_text())
+    assert [(item["policy"], item["overtime"]) for item in failures] == [("EDD", False)]
+    assert "boom" in failures[0]["error"]
