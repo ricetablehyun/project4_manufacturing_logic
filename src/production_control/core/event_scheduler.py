@@ -416,6 +416,10 @@ def schedule_operations_event_driven(
             for item in ready_items
             if item.dispatch.state is OperationState.RUNNING
         )
+        # Work paused by the plant's closing time resumes at the next opening,
+        # so a RUNNING operation continues at the first working moment from
+        # ``decision_time`` (the decision time itself during working hours).
+        resume_at = calendar.next_work_start(decision_time) if running_items else None
         for item in sorted(
             running_items,
             key=lambda candidate: (
@@ -432,7 +436,7 @@ def schedule_operations_event_driven(
                 allocations=active_allocations,
                 calendar=calendar,
             )
-            if slot.start != decision_time:
+            if slot.start != resume_at:
                 raise RuntimeError(
                     "RUNNING operation cannot continue at the current decision time: "
                     f"{item.operation.operation_id}"

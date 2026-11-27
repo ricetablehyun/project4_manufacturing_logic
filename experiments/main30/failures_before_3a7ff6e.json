@@ -1,0 +1,23 @@
+[
+  {
+    "condition": "STOPPAGE_REWORK",
+    "policy": "FCFS",
+    "overtime": false,
+    "seed": 13,
+    "error": "TerminalError: POST /replan-candidates failed with HTTP 409: {\"detail\":\"RUNNING operation cannot continue at the current decision time: ATTEMPT::OP::LOT-102-U09::STEP-04-TUNING::1\"}"
+  },
+  {
+    "condition": "STOPPAGE_REWORK",
+    "policy": "FCFS",
+    "overtime": true,
+    "seed": 13,
+    "error": "TerminalError: POST /replan-candidates failed with HTTP 409: {\"detail\":\"RUNNING operation cannot continue at the current decision time: ATTEMPT::OP::LOT-102-U09::STEP-04-TUNING::1\"}"
+  },
+  {
+    "condition": "STOPPAGE_REWORK",
+    "policy": "CR",
+    "overtime": false,
+    "seed": 21,
+    "error": "TerminalError: POST /replan-candidates failed with HTTP 409: {\"detail\":\"RUNNING operation cannot continue at the current decision time: ATTEMPT::OP::LOT-103-U26::STEP-04-TUNING::1\"}"
+  }
+]
