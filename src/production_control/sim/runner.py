@@ -19,8 +19,8 @@ Nothing in the loop reads the system's database directly. Initial layout data
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -161,6 +161,24 @@ def _adopt_initial_state(
     plant.mark_completed(completed)
 
 
+def _sync_calendar(terminal: ShopFloorTerminal, plant: VirtualPlant) -> WorkCalendar:
+    """Adopt the overtime the server has approved (D078)."""
+
+    tz = plant.calendar.tz
+    overtime = tuple(
+        sorted(
+            (
+                date.fromisoformat(window["day"]),
+                datetime.fromisoformat(window["end_at"]).astimezone(tz).time(),
+            )
+            for window in terminal.work_calendar()["overtime"]
+        )
+    )
+    if overtime != plant.calendar.overtime:
+        plant.set_calendar(replace(plant.calendar, overtime=overtime))
+    return plant.calendar
+
+
 def _all_work_completed(terminal: ShopFloorTerminal, plant: VirtualPlant) -> bool:
     if plant.running:
         return False
@@ -186,9 +204,9 @@ def run_closed_loop(
 ) -> RunResult:
     """Run the plant until every operation has finished (FINAL_TEST passed)."""
 
-    calendar = plant.calendar
     started_at = plant.clock
     clock.now = plant.clock
+    calendar = _sync_calendar(terminal, plant)
     plan = terminal.current_plan()
     _adopt_initial_state(
         terminal=terminal,
@@ -278,8 +296,11 @@ def run_closed_loop(
             )
             reviews.append(record)
             triggers = []
-            if record.action == "APPROVED" and working:
-                orders_payload = terminal.work_orders(t)
+            if record.action == "APPROVED":
+                calendar = _sync_calendar(terminal, plant)
+                working = calendar.is_working_time(t)
+                if working:
+                    orders_payload = terminal.work_orders(t)
 
         # 4. execute the current plan's work orders
         next_start_at: datetime | None = None

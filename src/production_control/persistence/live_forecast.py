@@ -1,7 +1,7 @@
 """Application-level Live Forecast orchestration over persisted production state."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time
 from math import isfinite
 
 from sqlalchemy import select
@@ -43,6 +43,9 @@ class LiveForecastConfig:
     calendar_id: str
     pace_min_samples: int
     warning_threshold_minutes: float
+    # D078: closing time of weekday overtime offered in replanning candidates.
+    # None keeps candidates on the regular calendar (midterm behaviour).
+    overtime_end: time | None = None
 
     def __post_init__(self) -> None:
         if not self.calendar_id:

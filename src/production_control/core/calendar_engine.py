@@ -1,7 +1,8 @@
 """Work-calendar calculations used by the finite-capacity scheduler."""
 
-from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from collections.abc import Iterable
+from dataclasses import dataclass, replace
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 
@@ -22,13 +23,16 @@ class WorkCalendar:
     """Recurring weekly work calendar.
 
     Datetimes passed to this class must be timezone-aware. V1 uses a common
-    Monday-Friday calendar and may layer resource exceptions on top elsewhere.
+    Monday-Friday calendar. ``overtime`` extends the closing time of specific
+    working days (D078): each entry is ``(day, extended_end)`` and applies to
+    the whole plant, because approved overtime keeps every station staffed.
     """
 
     timezone: str = "Asia/Seoul"
     work_start: time = time(9, 0)
     work_end: time = time(17, 0)
     active_weekdays: frozenset[int] = frozenset({0, 1, 2, 3, 4})
+    overtime: tuple[tuple[date, time], ...] = ()
 
     def __post_init__(self) -> None:
         if self.work_start >= self.work_end:
@@ -37,6 +41,14 @@ class WorkCalendar:
             raise ValueError("active_weekdays must not be empty")
         if any(day < 0 or day > 6 for day in self.active_weekdays):
             raise ValueError("active_weekdays must contain values from 0 to 6")
+        days = [day for day, _ in self.overtime]
+        if len(days) != len(set(days)):
+            raise ValueError("overtime days must be unique")
+        for day, extended_end in self.overtime:
+            if day.weekday() not in self.active_weekdays:
+                raise ValueError(f"overtime day is not a working day: {day}")
+            if extended_end <= self.work_end:
+                raise ValueError(f"overtime must end after work_end: {day} {extended_end}")
 
     @property
     def tz(self) -> ZoneInfo:
@@ -51,7 +63,32 @@ class WorkCalendar:
         return datetime.combine(value.date(), self.work_start, tzinfo=self.tz)
 
     def _day_end(self, value: datetime) -> datetime:
+        for day, extended_end in self.overtime:
+            if day == value.date():
+                return datetime.combine(day, extended_end, tzinfo=self.tz)
         return datetime.combine(value.date(), self.work_end, tzinfo=self.tz)
+
+    @property
+    def overtime_days(self) -> frozenset[date]:
+        return frozenset(day for day, _ in self.overtime)
+
+    def with_overtime(self, days: Iterable[date], extended_end: time) -> "WorkCalendar":
+        """Return this calendar with ``days`` (added to existing ones) closing later."""
+
+        merged = dict(self.overtime)
+        for day in days:
+            merged.setdefault(day, extended_end)
+        return replace(self, overtime=tuple(sorted(merged.items())))
+
+    def closing_time(self, day: date) -> datetime:
+        """Closing time of ``day`` including approved overtime."""
+
+        return self._day_end(datetime.combine(day, time.min, tzinfo=self.tz))
+
+    def regular_close(self, day: date) -> datetime:
+        """Closing time of ``day`` without overtime."""
+
+        return datetime.combine(day, self.work_end, tzinfo=self.tz)
 
     def is_working_time(self, value: datetime) -> bool:
         local = self._require_aware(value)

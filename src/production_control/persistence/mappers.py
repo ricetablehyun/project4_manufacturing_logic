@@ -1,5 +1,6 @@
 """Thin persistence-to-core mappers for confirmed reference data."""
 
+from dataclasses import replace
 from datetime import time
 
 from sqlalchemy import select
@@ -7,7 +8,13 @@ from sqlalchemy.orm import Session
 
 from production_control.core.calendar_engine import WorkCalendar
 from production_control.core.resource_engine import Resource
-from production_control.persistence.models import ResourceRow, WorkCalendarRow
+from production_control.persistence.models import (
+    CalendarExceptionRow,
+    ResourceRow,
+    WorkCalendarRow,
+)
+
+OVERTIME_EXCEPTION = "OVERTIME"
 
 
 def load_active_resources(session: Session) -> dict[str, Resource]:
@@ -39,9 +46,28 @@ def load_work_calendar(session: Session, calendar_id: str) -> WorkCalendar:
     if row is None:
         raise ValueError(f"unknown calendar_id: {calendar_id}")
 
-    return WorkCalendar(
+    calendar = WorkCalendar(
         timezone=row.timezone,
         work_start=_parse_hhmm(row.weekday_start),
         work_end=_parse_hhmm(row.weekday_end),
         active_weekdays=frozenset(row.active_weekdays),
     )
+    overtime: dict = {}
+    for exception in session.scalars(
+        select(CalendarExceptionRow).where(
+            CalendarExceptionRow.calendar_id == calendar_id,
+            CalendarExceptionRow.exception_type == OVERTIME_EXCEPTION,
+            CalendarExceptionRow.approval_status == "APPROVED",
+            CalendarExceptionRow.resource_id.is_(None),
+        )
+    ):
+        start = exception.start_at.astimezone(calendar.tz)
+        end = exception.end_at.astimezone(calendar.tz)
+        if start != calendar.regular_close(start.date()) or end.date() != start.date():
+            raise ValueError(
+                f"overtime must extend the regular close of one day: {exception.exception_id}"
+            )
+        overtime[start.date()] = max(end.time(), overtime.get(start.date(), end.time()))
+    if not overtime:
+        return calendar
+    return replace(calendar, overtime=tuple(sorted(overtime.items())))

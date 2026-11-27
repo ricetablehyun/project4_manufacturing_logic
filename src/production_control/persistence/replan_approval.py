@@ -11,14 +11,34 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from production_control.core.calendar_engine import WorkCalendar
 from production_control.core.replan_policy import ReplanAction
 from production_control.persistence.live_forecast import LiveForecastConfig
+from production_control.persistence.mappers import load_work_calendar
 from production_control.persistence.plan_lifecycle import (
     ApprovedPlanTaskDraft,
     load_current_approved_plan,
     persist_approved_replan,
 )
-from production_control.persistence.replan_candidates import build_replan_candidates
+from production_control.persistence.replan_candidates import (
+    PersistedReplanCandidate,
+    build_replan_candidates,
+)
+
+
+def _overtime_windows(
+    candidate: PersistedReplanCandidate,
+    calendar: WorkCalendar,
+) -> tuple[tuple[datetime, datetime], ...]:
+    if not candidate.overtime_days or candidate.overtime_end is None:
+        return ()
+    return tuple(
+        (
+            calendar.regular_close(day),
+            datetime.combine(day, candidate.overtime_end, tzinfo=calendar.tz),
+        )
+        for day in candidate.overtime_days
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +138,10 @@ def approve_replan_candidate(
         selected_kpi=selected.kpi,
         tasks=drafts,
         lot_priority_order=selected.lot_priority_order,
+        overtime_windows=_overtime_windows(
+            selected, load_work_calendar(session, config.calendar_id)
+        ),
+        calendar_id=config.calendar_id,
     )
 
     return ReplanApprovalResult(

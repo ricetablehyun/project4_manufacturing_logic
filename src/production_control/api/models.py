@@ -1,6 +1,6 @@
 """Transport models for the Production Control API."""
 
-from datetime import datetime
+from datetime import date, datetime, time
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -127,6 +127,23 @@ class ReplanCandidateResponse(BaseModel):
     policy_violation_reason: str | None
     tasks: list[ReplanCandidateTaskResponse]
     lot_priority_order: list[str] = []
+    overtime_days: list[date] = []
+    overtime_end: time | None = None
+
+
+class OvertimeWindowResponse(BaseModel):
+    day: date
+    start_at: datetime
+    end_at: datetime
+
+
+class WorkCalendarResponse(BaseModel):
+    calendar_id: str
+    timezone: str
+    work_start: time
+    work_end: time
+    active_weekdays: list[int]
+    overtime: list[OvertimeWindowResponse]
 
 
 class ReplanCandidatesResponse(BaseModel):

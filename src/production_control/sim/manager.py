@@ -36,6 +36,16 @@ class ReviewRecord:
     candidate_kpis: tuple[tuple[str, bool, int, float], ...] = ()
 
 
+def _rank_key(row: dict) -> tuple[int, float, float, int]:
+    kpi = row["kpi"]
+    return (
+        int(kpi["late_lot_count"]),
+        float(kpi["total_tardiness_minutes"]),
+        float(kpi["overtime_minutes"]),
+        int(kpi["change_count"]),
+    )
+
+
 def _forecast_risk(forecast: dict) -> str:
     if forecast["readiness"] != "READY":
         return forecast["readiness"]
@@ -86,14 +96,27 @@ def review(
             candidate_kpis=kpis,
         )
 
+    by_id = {row["candidate_id"]: row for row in snapshot["candidates"]}
     if policy is ApprovalPolicy.RECOMMENDED:
         chosen_id = snapshot.get("recommended_candidate_id")
     else:
+        # The server offers "<RULE>+OT" only when overtime is enabled (D078).
+        # The manager keeps the rule and adds overtime only if it ranks better
+        # by the same D029 order the system uses.
         chosen_id = policy.value
-    chosen = next(
-        (row for row in snapshot["candidates"] if row["candidate_id"] == chosen_id),
-        None,
-    )
+        overtime = by_id.get(f"{policy.value}+OT")
+        base = by_id.get(policy.value)
+        if (
+            overtime is not None
+            and overtime["policy_compliant"]
+            and (
+                base is None
+                or not base["policy_compliant"]
+                or _rank_key(overtime) < _rank_key(base)
+            )
+        ):
+            chosen_id = overtime["candidate_id"]
+    chosen = by_id.get(chosen_id) if chosen_id is not None else None
     if chosen is None or not chosen["policy_compliant"]:
         return ReviewRecord(
             at=at,
@@ -106,9 +129,20 @@ def review(
         )
 
     current = terminal.current_plan()
-    if current.get("lot_priority_order") == chosen.get("lot_priority_order"):
-        # Approving the order that is already in force would only add a plan
-        # version with no change in execution.
+    unfinished = {
+        lot["lot_id"]
+        for lot in forecast["lots"]
+        if datetime.fromisoformat(lot["forecast_end"]) > at
+    }
+
+    def remaining_order(order: list[str] | None) -> list[str]:
+        return [lot_id for lot_id in order or [] if lot_id in unfinished]
+
+    if remaining_order(current.get("lot_priority_order")) == remaining_order(
+        chosen.get("lot_priority_order")
+    ) and not chosen.get("overtime_days"):
+        # Approving the order that is already in force for the LOTs still in
+        # work would only add a plan version with no change in execution.
         return ReviewRecord(
             at=at,
             trigger=trigger,

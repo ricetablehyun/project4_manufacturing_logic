@@ -7,11 +7,12 @@ application boundary.
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from production_control.core.calendar_engine import WorkCalendar
 from production_control.core.candidate_evaluator import (
     CandidateKPI,
     PriorityRankSnapshot,
@@ -26,6 +27,7 @@ from production_control.core.finite_scheduler import (
     OperationSpec,
     ScheduleResult,
 )
+from production_control.core.overtime import overtime_used_by_day, overtime_window_days
 from production_control.core.pace_scheduler_adapter import ForecastReadiness
 from production_control.core.priority_rules import (
     LotPriorityInput,
@@ -36,6 +38,7 @@ from production_control.core.priority_rules import (
 from production_control.core.replan_policy import ReplanAction
 from production_control.core.risk_engine import RiskLevel
 from production_control.core.urgent_dispatch_policy import (
+    UrgentDispatchPolicyResult,
     evaluate_urgent_lot_dispatch_policy,
 )
 from production_control.persistence.forecast_input_bundle import (
@@ -84,6 +87,8 @@ class PersistedReplanCandidate:
     policy_compliant: bool
     policy_violation_reason: str | None
     lot_priority_order: tuple[str, ...] = ()
+    overtime_days: tuple[date, ...] = ()
+    overtime_end: time | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,11 +329,35 @@ def _candidate_tasks(
     return tuple(tasks), change_count
 
 
+OVERTIME_SUFFIX = "+OT"
+
+
+def _overtime_horizon(
+    *,
+    calendar: WorkCalendar,
+    forecast: PersistedForecastResult,
+) -> date | None:
+    """Last day whose overtime window opens before a late Gate is due."""
+
+    late_planned = [
+        gate.risk.planned_at
+        for gate in forecast.gate_forecasts
+        if gate.risk.slack_minutes < 0
+    ]
+    if not late_planned:
+        return None
+    latest = max(late_planned).astimezone(calendar.tz)
+    if calendar.regular_close(latest.date()) < latest:
+        return latest.date()
+    return latest.date() - timedelta(days=1)
+
+
 def _candidate_kpi(
     *,
     candidate_id: str,
     forecast: PersistedForecastResult,
     change_count: int,
+    overtime_minutes: float = 0.0,
 ) -> CandidateKPI:
     late_lot_ids: set[str] = set()
     total_tardiness_minutes = 0.0
@@ -342,9 +371,9 @@ def _candidate_kpi(
         candidate_id=candidate_id,
         late_lot_count=len(late_lot_ids),
         total_tardiness_minutes=total_tardiness_minutes,
-        # The current scheduler only uses the normal WorkCalendar. It cannot
-        # create overtime until a later CalendarException slice supplies it.
-        overtime_minutes=0.0,
+        # D078: overtime this candidate adds and its work uses. Overtime that
+        # an earlier approval already committed is part of the base calendar.
+        overtime_minutes=overtime_minutes,
         change_count=change_count,
     )
 
@@ -413,19 +442,13 @@ def build_replan_candidates(
     }
 
     built: dict[PriorityRule, PersistedReplanCandidate] = {}
+    built_overtime: dict[PriorityRule, PersistedReplanCandidate] = {}
 
-    def candidate_builder(rule: PriorityRule) -> CandidateKPI:
-        # Every rule ranks LOTs once at ``as_of`` and the candidate is scheduled
-        # with that frozen order. The approved plan stores the same order and
-        # Live Forecast replays it, so the KPI a manager approves is the KPI the
-        # approved plan produces. (Slack/CR were previously re-ranked at every
-        # decision point, which an approved LOT x process rank list could not
-        # reproduce.)
-        frozen_order = _frozen_lot_order(
-            rule=rule,
-            static_priorities=static_priorities,
-            lot_order=lot_order,
-        )
+    def evaluate(
+        rule: PriorityRule,
+        frozen_order: tuple[str, ...],
+        candidate_calendar: WorkCalendar,
+    ) -> tuple[ScheduleResult, UrgentDispatchPolicyResult, PersistedForecastResult]:
         schedule = schedule_operations_event_driven(
             items=items,
             rule=rule,
@@ -434,14 +457,14 @@ def build_replan_candidates(
                 frozen_order
             ),
             resources=resources,
-            calendar=calendar,
+            calendar=candidate_calendar,
             start_time=as_of,
         )
         policy = evaluate_urgent_lot_dispatch_policy(
             items=items,
             schedule=schedule,
             resources=resources,
-            calendar=calendar,
+            calendar=candidate_calendar,
             urgent_lot_ids=urgent_lot_ids,
         )
         candidate_forecast = evaluate_persisted_forecast(
@@ -456,27 +479,106 @@ def build_replan_candidates(
                 "candidate forecast is not READY; unresolved Gates: "
                 f"{unresolved}"
             )
+        return schedule, policy, candidate_forecast
 
+    def make_candidate(
+        *,
+        candidate_id: str,
+        rule: PriorityRule,
+        frozen_order: tuple[str, ...],
+        schedule: ScheduleResult,
+        policy: UrgentDispatchPolicyResult,
+        candidate_forecast: PersistedForecastResult,
+        overtime_days: tuple[date, ...] = (),
+        overtime_minutes: float = 0.0,
+    ) -> PersistedReplanCandidate:
         tasks, change_count = _candidate_tasks(
             session=session,
             schedule=schedule,
             parent_priorities=parent_priorities,
         )
         kpi = _candidate_kpi(
-            candidate_id=rule.value,
+            candidate_id=candidate_id,
             forecast=candidate_forecast,
             change_count=change_count,
+            overtime_minutes=overtime_minutes,
         )
-        built[rule] = PersistedReplanCandidate(
-            candidate_id=rule.value,
+        return PersistedReplanCandidate(
+            candidate_id=candidate_id,
             rule=rule,
             kpi=kpi,
             tasks=tasks,
             policy_compliant=policy.compliant,
             policy_violation_reason=policy.violation_reason,
             lot_priority_order=frozen_order,
+            overtime_days=overtime_days,
+            overtime_end=config.overtime_end if overtime_days else None,
         )
-        return kpi
+
+    def overtime_variant(
+        rule: PriorityRule,
+        frozen_order: tuple[str, ...],
+        base_forecast: PersistedForecastResult,
+    ) -> PersistedReplanCandidate | None:
+        """D078: the same frozen order with weekday overtime opened up to the
+        last day that can still help a late Gate; unused days are dropped."""
+
+        if config.overtime_end is None:
+            return None
+        through = _overtime_horizon(calendar=calendar, forecast=base_forecast)
+        if through is None:
+            return None
+        days = overtime_window_days(
+            calendar, start=as_of, through=through, extended_end=config.overtime_end
+        )
+        while days:
+            extended = calendar.with_overtime(days, config.overtime_end)
+            schedule, policy, candidate_forecast = evaluate(rule, frozen_order, extended)
+            used = overtime_used_by_day(
+                calendar=extended, allocations=schedule.allocations, days=days
+            )
+            kept = tuple(day for day in days if used.get(day, 0.0) > 0)
+            if kept == days:
+                return make_candidate(
+                    candidate_id=f"{rule.value}{OVERTIME_SUFFIX}",
+                    rule=rule,
+                    frozen_order=frozen_order,
+                    schedule=schedule,
+                    policy=policy,
+                    candidate_forecast=candidate_forecast,
+                    overtime_days=days,
+                    overtime_minutes=sum(used.values()),
+                )
+            # Closing an unused window can shift later work, so re-evaluate
+            # with only the used days until the opened set is stable.
+            days = kept
+        return None
+
+    def candidate_builder(rule: PriorityRule) -> CandidateKPI:
+        # Every rule ranks LOTs once at ``as_of`` and the candidate is scheduled
+        # with that frozen order. The approved plan stores the same order and
+        # Live Forecast replays it, so the KPI a manager approves is the KPI the
+        # approved plan produces. (Slack/CR were previously re-ranked at every
+        # decision point, which an approved LOT x process rank list could not
+        # reproduce.)
+        frozen_order = _frozen_lot_order(
+            rule=rule,
+            static_priorities=static_priorities,
+            lot_order=lot_order,
+        )
+        schedule, policy, candidate_forecast = evaluate(rule, frozen_order, calendar)
+        built[rule] = make_candidate(
+            candidate_id=rule.value,
+            rule=rule,
+            frozen_order=frozen_order,
+            schedule=schedule,
+            policy=policy,
+            candidate_forecast=candidate_forecast,
+        )
+        variant = overtime_variant(rule, frozen_order, candidate_forecast)
+        if variant is not None:
+            built_overtime[rule] = variant
+        return built[rule].kpi
 
     orchestration = orchestrate_persisted_forecast(
         forecast=live.result,
@@ -485,6 +587,10 @@ def build_replan_candidates(
     candidates = tuple(
         built[candidate.rule]
         for candidate in orchestration.candidates
+    ) + tuple(
+        built_overtime[candidate.rule]
+        for candidate in orchestration.candidates
+        if candidate.rule in built_overtime
     )
     compliant_candidates = tuple(
         candidate for candidate in candidates if candidate.policy_compliant

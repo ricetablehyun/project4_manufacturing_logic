@@ -89,6 +89,10 @@ class ShopFloorTerminal:
         response = self.client.get("/lots")
         return self._json(response, expected=(200,), action="GET /lots")
 
+    def work_calendar(self) -> dict:
+        response = self.client.get("/work-calendar")
+        return self._json(response, expected=(200,), action="GET /work-calendar")
+
     def gates(self) -> list[dict]:
         response = self.client.get("/inspection-gates")
         return self._json(response, expected=(200,), action="GET /inspection-gates")
