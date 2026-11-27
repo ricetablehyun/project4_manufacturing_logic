@@ -71,6 +71,18 @@ def _load_attempt_records(
     if not operations:
         raise ValueError(f"unit has no UnitOperation rows: {unit_id}")
 
+    attempts_by_operation: dict[str, list[WorkAttemptRow]] = {}
+    for attempt in session.scalars(
+        select(WorkAttemptRow)
+        .where(
+            WorkAttemptRow.unit_operation_id.in_(
+                [operation.unit_operation_id for operation in operations]
+            )
+        )
+        .order_by(WorkAttemptRow.unit_operation_id, WorkAttemptRow.attempt_no)
+    ):
+        attempts_by_operation.setdefault(attempt.unit_operation_id, []).append(attempt)
+
     records: dict[str, _AttemptRecord] = {}
     for operation in operations:
         step = session.get(RoutingStepRow, operation.routing_step_id)
@@ -85,14 +97,7 @@ def _load_attempt_records(
                 f"RoutingStep references missing Process: {step.process_id}"
             )
 
-        attempts = session.scalars(
-            select(WorkAttemptRow)
-            .where(
-                WorkAttemptRow.unit_operation_id
-                == operation.unit_operation_id
-            )
-            .order_by(WorkAttemptRow.attempt_no)
-        ).all()
+        attempts = attempts_by_operation.get(operation.unit_operation_id, [])
         if not attempts:
             raise ValueError(
                 "UnitOperation has no WorkAttempt rows: "

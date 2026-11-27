@@ -12,6 +12,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from production_control.core.calendar_engine import MINUTE_TOLERANCE
 from production_control.core.dispatch_builder import OperationDispatchInput
 from production_control.core.event_scheduler import EventDispatchInput
 from production_control.core.finite_scheduler import OperationSpec
@@ -229,7 +230,7 @@ def build_rework_schedule_inputs(
                 as_of=as_of,
             )
         remaining = forecast.pace_minutes_per_unit - active
-        if remaining <= 0:
+        if remaining <= MINUTE_TOLERANCE:
             if operation.expected_remaining_minutes is None:
                 waiting_operation_ids.append(projected.attempt_id)
                 continue

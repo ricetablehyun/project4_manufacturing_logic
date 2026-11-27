@@ -5,6 +5,11 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+# Durations are float minutes (Pace averages) while datetimes resolve to
+# microseconds. A remainder below this tolerance is rounding noise, not work;
+# without it a 1e-9 minute tail became a zero-length segment on the next day.
+MINUTE_TOLERANCE = 1e-6
+
 
 @dataclass(frozen=True, slots=True)
 class WorkSegment:
@@ -135,8 +140,8 @@ class WorkCalendar:
             closing = self._day_end(current)
             available = (closing - current).total_seconds() / 60
 
-            if remaining <= available:
-                return current + timedelta(minutes=remaining)
+            if remaining <= available + MINUTE_TOLERANCE:
+                return current + timedelta(minutes=min(remaining, available))
 
             remaining -= available
             current = self.next_work_start(closing)
@@ -153,15 +158,18 @@ class WorkCalendar:
         remaining = float(minutes)
         segments: list[WorkSegment] = []
 
-        while remaining > 0:
+        while not segments or remaining > MINUTE_TOLERANCE:
             closing = self._day_end(current)
             available = (closing - current).total_seconds() / 60
-            segment_minutes = min(remaining, available)
+            if remaining <= available + MINUTE_TOLERANCE:
+                segment_minutes = min(remaining, available)
+            else:
+                segment_minutes = available
             segment_end = current + timedelta(minutes=segment_minutes)
             segments.append(WorkSegment(start=current, end=segment_end))
             remaining -= segment_minutes
 
-            if remaining > 0:
+            if remaining > MINUTE_TOLERANCE:
                 current = self.next_work_start(closing)
 
         return tuple(segments)
