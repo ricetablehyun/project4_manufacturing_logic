@@ -396,29 +396,46 @@ def run_experiment(
 ) -> list[RunRow]:
     out.mkdir(parents=True, exist_ok=True)
     started = wall_time.perf_counter()
-    rows: list[RunRow] = []
+    # Each finished run is appended to runs.jsonl at once, so an interrupted
+    # experiment resumes where it stopped and never repeats a finished run.
+    journal = out / "runs.jsonl"
+    done: dict[RunSpec, RunRow] = {}
+    if journal.exists():
+        for line in journal.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                row = RunRow(**json.loads(line))
+                done[RunSpec(row.condition, row.policy, row.overtime, row.seed)] = row
+    todo = [spec for spec in specs if spec not in done]
+    rows: list[RunRow] = [done[spec] for spec in specs if spec in done]
+    if progress and done:
+        print(f"resuming: {len(rows)} of {len(specs)} runs already finished", flush=True)
     if workers <= 1:
-        iterator = map(execute, specs)
+        iterator = map(execute, todo)
         pool = None
     else:
         pool = ProcessPoolExecutor(max_workers=workers)
-        iterator = pool.map(execute, specs)
+        iterator = pool.map(execute, todo)
     try:
-        for index, row in enumerate(iterator, start=1):
-            rows.append(row)
-            if progress:
-                print(
-                    f"[{index}/{len(specs)}] {row.condition}/{row.policy}"
-                    f"{'+OT' if row.overtime else ''}/s{row.seed} "
-                    f"gate_delay={row.gate_delay_minutes:.0f} "
-                    f"due_tardy={row.due_tardiness_minutes:.0f} "
-                    f"ot={row.overtime_minutes:.0f} ({row.wall_seconds:.0f}s)",
-                    flush=True,
-                )
+        with journal.open("a", encoding="utf-8") as handle:
+            for row in iterator:
+                rows.append(row)
+                handle.write(json.dumps(asdict(row)) + "\n")
+                handle.flush()
+                if progress:
+                    print(
+                        f"[{len(rows)}/{len(specs)}] {row.condition}/{row.policy}"
+                        f"{'+OT' if row.overtime else ''}/s{row.seed} "
+                        f"gate_delay={row.gate_delay_minutes:.0f} "
+                        f"due_tardy={row.due_tardiness_minutes:.0f} "
+                        f"ot={row.overtime_minutes:.0f} ({row.wall_seconds:.0f}s)",
+                        flush=True,
+                    )
     finally:
         if pool is not None:
             pool.shutdown()
 
+    order = {spec: index for index, spec in enumerate(specs)}
+    rows.sort(key=lambda row: order[RunSpec(row.condition, row.policy, row.overtime, row.seed)])
     _write_csv(out / "runs.csv", [asdict(row) for row in rows])
     _write_csv(out / "summary.csv", summarise(rows))
     (out / "config.json").write_text(
