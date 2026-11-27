@@ -358,3 +358,28 @@ def test_running_work_continues_before_higher_priority_waiting_work() -> None:
     assert by_id["RUNNING"].start == dt(9)
     assert by_id["RUNNING"].end == dt(9, 30)
     assert by_id["WAITING"].start == dt(9, 30)
+
+
+def test_running_work_paused_at_closing_time_resumes_next_opening() -> None:
+    """A decision at 17:00 finds work still RUNNING: it resumes at 09:00 next day."""
+
+    result = schedule_operations_event_driven(
+        items=(
+            item("RUNNING", "LOT-A", "U1", duration=24, state=OperationState.RUNNING),
+            item("WAITING", "LOT-B", "U1", duration=10),
+        ),
+        rule=PriorityRule.EDD,
+        static_lot_priorities=(
+            static_priority("LOT-A", deadline=dt(17)),
+            static_priority("LOT-B", deadline=dt(10)),
+        ),
+        resources=resources(),
+        calendar=WorkCalendar(),
+        start_time=dt(17),
+    )
+
+    next_day = datetime(2026, 10, 6, 9, 0, tzinfo=SEOUL)
+    by_id = {operation.operation_id: operation for operation in result.operations}
+    assert by_id["RUNNING"].start == next_day
+    assert by_id["RUNNING"].end == datetime(2026, 10, 6, 9, 24, tzinfo=SEOUL)
+    assert by_id["WAITING"].start == by_id["RUNNING"].end
