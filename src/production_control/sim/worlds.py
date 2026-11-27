@@ -94,3 +94,42 @@ def build_f02_world(
         session.close()
         engine.dispose()
     return database_path
+
+
+def build_demo_world(
+    path: str | Path,
+    *,
+    baseline_lot_order: tuple[str, ...] | None = None,
+) -> Path:
+    """The midterm presentation state (3 LOTs x 30 Units at 10/22 13:00).
+
+    ``baseline_lot_order`` re-ranks the baseline plan LOT by LOT while keeping
+    the step order inside each LOT, e.g. ("LOT-101", "LOT-102", "LOT-103") for
+    a first-come-first-served baseline that serves LOT-102 before LOT-103
+    although LOT-103's shipping-inspection Gate is earlier.
+    """
+
+    from production_control.demo.bootstrap import DEMO_PLAN_ID, initialize_demo_database
+
+    database_path = initialize_demo_database(path, reset=True)
+    if baseline_lot_order is None:
+        return database_path
+    engine = create_sqlite_engine(database_path)
+    session = create_session_factory(engine)()
+    try:
+        tasks = session.scalars(
+            select(ScheduleTaskRow).where(ScheduleTaskRow.plan_id == DEMO_PLAN_ID)
+        ).all()
+        if {task.lot_id for task in tasks} != set(baseline_lot_order):
+            raise ValueError(f"baseline_lot_order must list the demo LOTs: {baseline_lot_order}")
+        position = {lot_id: index for index, lot_id in enumerate(baseline_lot_order)}
+        ordered = sorted(
+            tasks, key=lambda task: (position[task.lot_id], task.priority_rank)
+        )
+        for rank, task in enumerate(ordered, start=1):
+            task.priority_rank = rank
+        session.commit()
+    finally:
+        session.close()
+        engine.dispose()
+    return database_path

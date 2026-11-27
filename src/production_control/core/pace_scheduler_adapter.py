@@ -26,6 +26,7 @@ from datetime import datetime
 from enum import StrEnum
 from math import isfinite
 
+from production_control.core.calendar_engine import MINUTE_TOLERANCE
 from production_control.core.dispatch_builder import OperationDispatchInput
 from production_control.core.event_scheduler import EventDispatchInput
 from production_control.core.finite_scheduler import OperationSpec
@@ -240,15 +241,19 @@ def build_pace_schedule_inputs(
             )
         )
 
+        # A share of a few nanominutes is float noise from the budget split and
+        # counts as exhausted; scheduling it would create a zero-length slot.
         share = workload_by_unit[unit.unit_id]
         if unit.state is OperationState.HOLD:
             duration = hold_forecast_minutes
-        elif unit.state is OperationState.RUNNING and (pace_overrun > 0 or share <= 0):
+        elif unit.state is OperationState.RUNNING and (
+            pace_overrun > 0 or share <= MINUTE_TOLERANCE
+        ):
             if unit.expected_remaining_minutes is None:
                 waiting_operation_ids.append(unit.operation_id)
                 continue
             duration = unit.expected_remaining_minutes
-        elif share <= 0:
+        elif share <= MINUTE_TOLERANCE:
             # D076: exhausted budget; a Unit that has not started still needs
             # real work, estimated at the current LOT x process Pace.
             duration = forecast.pace_minutes_per_unit

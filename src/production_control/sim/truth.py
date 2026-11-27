@@ -48,6 +48,11 @@ class TruthModel:
       ``(unit_operation_id, attempt_no)``, added on top of the sampled time.
     - ``estimate_sigma``: log-normal error of a worker's expected-remaining
       estimate. 0 means workers estimate the true remaining time exactly.
+    - ``duration_multiplier``: systematic slowdown (> 1) of every true work
+      time relative to the standard, applied on top of the random spread.
+    - ``hold_probability`` / ``hold_minutes``: chance that an attempt is
+      stopped mid-work (material, equipment) and loses ``hold_minutes`` of
+      working time before it can finish.
     """
 
     seed: int = 0
@@ -55,6 +60,9 @@ class TruthModel:
     final_test_fail_probability: float = 0.0
     extra_minutes: Mapping[tuple[str, int], float] = field(default_factory=dict)
     estimate_sigma: float = 0.0
+    duration_multiplier: float = 1.0
+    hold_probability: float = 0.0
+    hold_minutes: float = 0.0
 
     def __post_init__(self) -> None:
         if self.duration_sigma < 0:
@@ -63,6 +71,12 @@ class TruthModel:
             raise ValueError("final_test_fail_probability must be in [0, 1)")
         if self.estimate_sigma < 0:
             raise ValueError("estimate_sigma must be 0 or greater")
+        if self.duration_multiplier <= 0:
+            raise ValueError("duration_multiplier must be greater than 0")
+        if not 0 <= self.hold_probability < 1:
+            raise ValueError("hold_probability must be in [0, 1)")
+        if self.hold_minutes < 0:
+            raise ValueError("hold_minutes must be 0 or greater")
         for key, minutes in self.extra_minutes.items():
             if minutes < 0:
                 raise ValueError(f"extra_minutes must be 0 or greater: {key}")
@@ -83,8 +97,13 @@ class TruthModel:
             z = keyed_standard_normal(self.seed, unit_operation_id, attempt_no, "duration")
             sigma = self.duration_sigma
             multiplier = exp(sigma * z - sigma * sigma / 2)
-        sampled = max(1, round(standard_minutes * multiplier))
+        sampled = max(1, round(standard_minutes * self.duration_multiplier * multiplier))
         extra = self.extra_minutes.get((unit_operation_id, attempt_no), 0.0)
+        if self.hold_probability > 0 and (
+            keyed_uniform(self.seed, unit_operation_id, attempt_no, "hold")
+            < self.hold_probability
+        ):
+            extra += self.hold_minutes
         return float(sampled + round(extra))
 
     def final_test_passes(self, *, unit_operation_id: str, attempt_no: int) -> bool:

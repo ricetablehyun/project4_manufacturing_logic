@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -55,3 +55,17 @@ def test_used_overtime_counts_from_regular_close_to_last_release() -> None:
     )
 
     assert used == {MONDAY: 75.0}
+
+
+def test_float_rounding_tail_does_not_spill_into_the_next_day() -> None:
+    """A Pace-average duration that exceeds the day's remaining time only by
+    float noise must end at the close, not create a zero-length segment."""
+
+    calendar = WorkCalendar()
+    start = at(5, 16, 34) + timedelta(seconds=14, microseconds=482759)
+    available = (at(5, 17) - start).total_seconds() / 60
+
+    segments = calendar.working_segments(start, available + 1e-9)
+
+    assert [(segment.start, segment.end) for segment in segments] == [(start, at(5, 17))]
+    assert calendar.add_working_minutes(start, available + 1e-9) == at(5, 17)

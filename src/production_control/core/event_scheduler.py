@@ -89,6 +89,37 @@ def _previous_precedence_seq(
     return max(earlier_steps) if earlier_steps else None
 
 
+_PREDECESSOR_CACHE: dict[int, tuple[tuple[OperationSpec, ...], dict]] = {}
+
+
+def _unit_predecessors(
+    operations: tuple[OperationSpec, ...],
+) -> dict[str, tuple[OperationSpec, ...]]:
+    """Same-Unit earlier operations per operation id, built once per input tuple.
+
+    The cache holds a reference to the tuple it was built from, so an id can
+    only be reused after that tuple is gone and the entry is replaced.
+    """
+
+    cached = _PREDECESSOR_CACHE.get(id(operations))
+    if cached is not None and cached[0] is operations:
+        return cached[1]
+    by_unit: dict[tuple[str, str], list[OperationSpec]] = {}
+    for operation in operations:
+        by_unit.setdefault((operation.lot_id, operation.unit_id), []).append(operation)
+    index = {
+        operation.operation_id: tuple(
+            other
+            for other in by_unit[(operation.lot_id, operation.unit_id)]
+            if other.precedence_seq < operation.precedence_seq
+        )
+        for operation in operations
+    }
+    _PREDECESSOR_CACHE.clear()
+    _PREDECESSOR_CACHE[id(operations)] = (operations, index)
+    return index
+
+
 def _predecessors_completed(
     *,
     target: OperationSpec,
@@ -96,13 +127,15 @@ def _predecessors_completed(
     scheduled_by_id: dict[str, ScheduledOperation],
     decision_time: datetime,
 ) -> bool:
-    predecessors = [
-        operation
-        for operation in operations
-        if operation.lot_id == target.lot_id
-        and operation.unit_id == target.unit_id
-        and operation.precedence_seq < target.precedence_seq
-    ]
+    predecessors = _unit_predecessors(operations).get(target.operation_id)
+    if predecessors is None:
+        predecessors = [
+            operation
+            for operation in operations
+            if operation.lot_id == target.lot_id
+            and operation.unit_id == target.unit_id
+            and operation.precedence_seq < target.precedence_seq
+        ]
 
     for predecessor in predecessors:
         scheduled = scheduled_by_id.get(predecessor.operation_id)
@@ -349,10 +382,22 @@ def schedule_operations_event_driven(
     scheduled_by_id: dict[str, ScheduledOperation] = {}
     scheduled_operations: list[ScheduledOperation] = []
     allocations = list(initial_allocations)
+    # Every slot query starts at ``decision_time``, which never moves backwards,
+    # so allocations that ended by then can never conflict again. Searching only
+    # the still-active ones gives the same slots in a fraction of the time.
+    active_allocations = list(allocations)
     static_priorities = tuple(static_lot_priorities)
     decision_time = start_time
 
+    def reserve(operation: OperationSpec, scheduled: ScheduledOperation) -> None:
+        before = len(allocations)
+        _reserve_resources(operation=operation, scheduled=scheduled, allocations=allocations)
+        active_allocations.extend(allocations[before:])
+
     while pending:
+        active_allocations[:] = [
+            allocation for allocation in active_allocations if allocation.end > decision_time
+        ]
         pending_items = tuple(by_id[operation_id] for operation_id in pending)
         ready_items = tuple(
             item
@@ -384,7 +429,7 @@ def schedule_operations_event_driven(
                 duration_minutes=item.operation.duration_minutes,
                 requirements=item.operation.requirements,
                 resources=resources,
-                allocations=allocations,
+                allocations=active_allocations,
                 calendar=calendar,
             )
             if slot.start != decision_time:
@@ -406,11 +451,7 @@ def schedule_operations_event_driven(
             )
             scheduled_by_id[item.operation.operation_id] = scheduled
             scheduled_operations.append(scheduled)
-            _reserve_resources(
-                operation=item.operation,
-                scheduled=scheduled,
-                allocations=allocations,
-            )
+            reserve(item.operation, scheduled)
             pending.remove(item.operation.operation_id)
 
         ready_items = tuple(
@@ -464,7 +505,7 @@ def schedule_operations_event_driven(
                     duration_minutes=item.operation.duration_minutes,
                     requirements=item.operation.requirements,
                     resources=resources,
-                    allocations=allocations,
+                    allocations=active_allocations,
                     calendar=calendar,
                 )
                 if slot.start != decision_time:
@@ -483,11 +524,7 @@ def schedule_operations_event_driven(
                 )
                 scheduled_by_id[operation_id] = scheduled
                 scheduled_operations.append(scheduled)
-                _reserve_resources(
-                    operation=item.operation,
-                    scheduled=scheduled,
-                    allocations=allocations,
-                )
+                reserve(item.operation, scheduled)
                 pending.remove(operation_id)
 
         if pending:
@@ -498,7 +535,7 @@ def schedule_operations_event_driven(
                 all_operations=operation_tuple,
                 scheduled_by_id=scheduled_by_id,
                 scheduled_operations=scheduled_operations,
-                allocations=allocations,
+                allocations=active_allocations,
                 resources=resources,
                 calendar=calendar,
             )
