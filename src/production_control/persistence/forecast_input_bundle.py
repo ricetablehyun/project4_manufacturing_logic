@@ -20,6 +20,7 @@ from production_control.core.pace_scheduler_adapter import (
     UnitPaceSignal,
     build_pace_schedule_inputs,
 )
+from production_control.domain.enums import OperationState
 from production_control.persistence.execution_projection import (
     UnitExecutionProjection,
     project_unit_execution_order,
@@ -31,9 +32,7 @@ from production_control.persistence.models import (
     UnitRow,
     WorkAttemptRow,
 )
-from production_control.persistence.pace_snapshot import (
-    effective_attempt_active_minutes,
-)
+from production_control.persistence.pace_snapshot import effective_attempt_active_minutes
 from production_control.persistence.rework_scheduler_adapter import (
     build_waiting_rework_schedule_inputs,
     load_routing_step_requirements,
@@ -50,6 +49,35 @@ class PersistedForecastInputBundle:
     signals: tuple[UnitPaceSignal, ...]
 
 
+def _started_routing_step_ids(
+    *,
+    session: Session,
+    lot_id: str,
+) -> frozenset[str]:
+    """Return routing steps that have already started for at least one Unit.
+
+    Transfer-buffer release is irreversible within a LOT. A live Forecast built
+    from only unfinished operations must therefore preserve the fact that a
+    downstream step already started before the current snapshot; otherwise the
+    event scheduler would incorrectly wait for K new upstream completions.
+    """
+
+    rows = session.scalars(
+        select(UnitOperationRow.routing_step_id)
+        .join(UnitRow, UnitOperationRow.unit_id == UnitRow.unit_id)
+        .join(
+            WorkAttemptRow,
+            WorkAttemptRow.unit_operation_id == UnitOperationRow.unit_operation_id,
+        )
+        .where(
+            UnitRow.lot_id == lot_id,
+            WorkAttemptRow.started_at.is_not(None),
+        )
+        .distinct()
+    ).all()
+    return frozenset(rows)
+
+
 def _normal_input_from_projection(
     *,
     session: Session,
@@ -57,6 +85,7 @@ def _normal_input_from_projection(
     unit: UnitRow,
     projection: UnitExecutionProjection,
     as_of: datetime | None,
+    started_routing_step_ids: frozenset[str],
 ) -> tuple[UnitPaceSchedulingInput, ...]:
     inputs: list[UnitPaceSchedulingInput] = []
 
@@ -64,10 +93,7 @@ def _normal_input_from_projection(
         if projected.rework_role is not None:
             continue
 
-        operation = session.get(
-            UnitOperationRow,
-            projected.unit_operation_id,
-        )
+        operation = session.get(UnitOperationRow, projected.unit_operation_id)
         if operation is None:
             raise ValueError(
                 "projection references missing UnitOperation: "
@@ -75,9 +101,7 @@ def _normal_input_from_projection(
             )
         attempt = session.get(WorkAttemptRow, projected.attempt_id)
         if attempt is None:
-            raise ValueError(
-                f"projection references missing WorkAttempt: {projected.attempt_id}"
-            )
+            raise ValueError(f"projection references missing WorkAttempt: {projected.attempt_id}")
         step = session.get(RoutingStepRow, operation.routing_step_id)
         if step is None:
             raise ValueError(
@@ -85,9 +109,7 @@ def _normal_input_from_projection(
                 f"{operation.routing_step_id}"
             )
         if step.duration_mode != "UNIT_TIME":
-            raise ValueError(
-                "persisted internal forecast bundle only accepts UNIT_TIME steps"
-            )
+            raise ValueError("persisted internal forecast bundle only accepts UNIT_TIME steps")
         if step.standard_minutes is None:
             raise ValueError(
                 f"UNIT_TIME step is missing standard_minutes: {step.routing_step_id}"
@@ -102,6 +124,19 @@ def _normal_input_from_projection(
                 as_of=as_of,
             )
 
+        eligible_at = operation.eligible_at
+        release_at = max(lot.release_at, operation.eligible_at)
+        if (
+            projected.operation_state is OperationState.HOLD
+            and operation.hold_until is not None
+        ):
+            eligible_at = max(eligible_at, operation.hold_until)
+            release_at = max(release_at, operation.hold_until)
+
+        release_buffer_k = step.release_buffer_k
+        if step.routing_step_id in started_routing_step_ids:
+            release_buffer_k = None
+
         inputs.append(
             UnitPaceSchedulingInput(
                 operation_id=attempt.attempt_id,
@@ -110,14 +145,15 @@ def _normal_input_from_projection(
                 step_seq=projected.step_seq,
                 process_code=projected.process_code,
                 state=projected.operation_state,
-                eligible_at=operation.eligible_at,
-                release_at=max(lot.release_at, operation.eligible_at),
+                eligible_at=eligible_at,
+                release_at=release_at,
                 requirements=load_routing_step_requirements(
                     session,
                     routing_step_id=step.routing_step_id,
                 ),
-                release_buffer_k=step.release_buffer_k,
+                release_buffer_k=release_buffer_k,
                 active_minutes=active_minutes,
+                expected_remaining_minutes=operation.expected_remaining_minutes,
                 hold_remaining_minutes=operation.hold_remaining_minutes,
                 standard_minutes_per_unit=step.standard_minutes,
                 execution_seq=projected.execution_seq,
@@ -132,10 +168,7 @@ def _group_normal_inputs(
 ) -> dict[tuple[str, int], list[UnitPaceSchedulingInput]]:
     grouped: dict[tuple[str, int], list[UnitPaceSchedulingInput]] = {}
     for item in inputs:
-        grouped.setdefault(
-            (item.process_code, item.step_seq),
-            [],
-        ).append(item)
+        grouped.setdefault((item.process_code, item.step_seq), []).append(item)
     return grouped
 
 
@@ -160,13 +193,12 @@ def build_internal_lot_forecast_inputs(
         raise ValueError(f"unknown lot_id: {lot_id}")
 
     units = session.scalars(
-        select(UnitRow)
-        .where(UnitRow.lot_id == lot_id)
-        .order_by(UnitRow.unit_id)
+        select(UnitRow).where(UnitRow.lot_id == lot_id).order_by(UnitRow.unit_id)
     ).all()
     if not units:
         raise ValueError(f"LOT has no Units: {lot_id}")
 
+    started_step_ids = _started_routing_step_ids(session=session, lot_id=lot_id)
     projections: list[UnitExecutionProjection] = []
     normal_inputs: list[UnitPaceSchedulingInput] = []
 
@@ -183,6 +215,7 @@ def build_internal_lot_forecast_inputs(
                 unit=unit,
                 projection=projection,
                 as_of=as_of,
+                started_routing_step_ids=started_step_ids,
             )
         )
 

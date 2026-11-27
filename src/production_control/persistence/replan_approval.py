@@ -92,6 +92,9 @@ def approve_replan_candidate(
     )
     if selected is None:
         raise LookupError(f"unknown replan candidate_id: {candidate_id}")
+    if not selected.policy_compliant:
+        reason = selected.policy_violation_reason or "urgent LOT priority policy violation"
+        raise ValueError(f"replan candidate is not approvable: {reason}")
 
     drafts = tuple(
         ApprovedPlanTaskDraft(

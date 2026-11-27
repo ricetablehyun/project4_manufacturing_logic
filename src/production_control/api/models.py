@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from production_control.core.execution_state import WorkEventType
 
@@ -15,6 +15,7 @@ class WorkEventRequest(BaseModel):
     station_code: str | None = None
     worker_code: str | None = None
     reason: str | None = None
+    expected_hold_minutes: float | None = Field(default=None, gt=0)
 
     @field_validator("occurred_at")
     @classmethod
@@ -22,6 +23,15 @@ class WorkEventRequest(BaseModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("occurred_at must be timezone-aware")
         return value
+
+    @model_validator(mode="after")
+    def validate_hold_estimate(self) -> "WorkEventRequest":
+        if self.event_type is WorkEventType.HOLD:
+            if self.expected_hold_minutes is None:
+                raise ValueError("HOLD requires expected_hold_minutes")
+        elif self.expected_hold_minutes is not None:
+            raise ValueError("expected_hold_minutes is only valid for HOLD")
+        return self
 
 
 class WorkEventResponse(BaseModel):
@@ -74,6 +84,24 @@ class LiveForecastResponse(BaseModel):
     waiting_operation_ids: list[str]
 
 
+class CurrentPlanTaskResponse(BaseModel):
+    lot_id: str
+    routing_step_id: str
+    process_code: str
+    seq_no: int
+    target_start: datetime
+    target_end: datetime
+    target_qty: int
+    priority_rank: int
+
+
+class CurrentPlanResponse(BaseModel):
+    plan_id: str
+    version: int
+    priority_rule: str
+    tasks: list[CurrentPlanTaskResponse]
+
+
 class CandidateKPIResponse(BaseModel):
     late_lot_count: int
     total_tardiness_minutes: float
@@ -94,6 +122,8 @@ class ReplanCandidateResponse(BaseModel):
     candidate_id: str
     rule: str
     kpi: CandidateKPIResponse
+    policy_compliant: bool
+    policy_violation_reason: str | None
     tasks: list[ReplanCandidateTaskResponse]
 
 

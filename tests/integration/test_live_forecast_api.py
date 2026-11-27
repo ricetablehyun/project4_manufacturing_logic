@@ -17,6 +17,7 @@ from production_control.persistence.models import SchedulePlanRow, ScheduleTaskR
 
 SEOUL = ZoneInfo("Asia/Seoul")
 PLAN_ID = "PLAN-LIVE-1"
+TAPING_OPERATION_ID = "OP::LOT-101-U01::STEP-01-TAPING"
 INTERNAL_STEPS = (
     "STEP-01-TAPING",
     "STEP-03-GENERAL-ASSEMBLY",
@@ -95,6 +96,22 @@ def process_forecast(payload: dict, *, lot_id: str, process_code: str) -> dict:
     )
 
 
+def start_first_taping(client: TestClient) -> None:
+    accepted = client.post(
+        "/work-events",
+        json={
+            "event_id": "LIVE-TAPING-START",
+            "unit_operation_id": TAPING_OPERATION_ID,
+            "event_type": "START",
+            "occurred_at": dt(9).isoformat(),
+            "station_code": "ASSEMBLY",
+            "worker_code": "WORKER-A",
+            "reason": None,
+        },
+    )
+    assert accepted.status_code == 201
+
+
 def test_get_forecast_uses_current_approved_plan_and_explicit_as_of(
     tmp_path: Path,
 ) -> None:
@@ -135,19 +152,7 @@ def test_work_event_changes_live_forecast_at_same_reference_time(
         process_code="TAPING",
     )
 
-    accepted = client.post(
-        "/work-events",
-        json={
-            "event_id": "LIVE-TAPING-START",
-            "unit_operation_id": "OP::LOT-101-U01::STEP-01-TAPING",
-            "event_type": "START",
-            "occurred_at": dt(9).isoformat(),
-            "station_code": "ASSEMBLY",
-            "worker_code": "WORKER-A",
-            "reason": None,
-        },
-    )
-    assert accepted.status_code == 201
+    start_first_taping(client)
 
     after = client.get("/forecast", params=params)
     assert after.status_code == 200
@@ -161,23 +166,11 @@ def test_work_event_changes_live_forecast_at_same_reference_time(
     assert after_taping["forecast_end"] != before_taping["forecast_end"]
 
 
-def test_running_over_pace_without_remaining_estimate_returns_wait(
+def test_running_over_pace_exposes_actionable_unit_operation_id(
     tmp_path: Path,
 ) -> None:
     client = seeded_client(tmp_path)
-    accepted = client.post(
-        "/work-events",
-        json={
-            "event_id": "LIVE-TAPING-START",
-            "unit_operation_id": "OP::LOT-101-U01::STEP-01-TAPING",
-            "event_type": "START",
-            "occurred_at": dt(9).isoformat(),
-            "station_code": "ASSEMBLY",
-            "worker_code": "WORKER-A",
-            "reason": None,
-        },
-    )
-    assert accepted.status_code == 201
+    start_first_taping(client)
 
     response = client.get(
         "/forecast",
@@ -190,9 +183,36 @@ def test_running_over_pace_without_remaining_estimate_returns_wait(
     assert payload["lots"] == []
     assert payload["gates"] == []
     assert payload["processes"] == []
-    assert payload["waiting_operation_ids"] == [
-        "ATTEMPT::OP::LOT-101-U01::STEP-01-TAPING::1"
-    ]
+    assert payload["waiting_operation_ids"] == [TAPING_OPERATION_ID]
+
+
+def test_worker_remaining_estimate_resumes_forecast(tmp_path: Path) -> None:
+    client = seeded_client(tmp_path)
+    start_first_taping(client)
+
+    waiting = client.get(
+        "/forecast",
+        params={"as_of": dt(9, 11).isoformat()},
+    )
+    assert waiting.status_code == 200
+    assert waiting.json()["readiness"] == "WAIT"
+
+    updated = client.patch(
+        f"/unit-operations/{TAPING_OPERATION_ID}/expected-remaining",
+        json={"expected_remaining_minutes": 7},
+    )
+    assert updated.status_code == 200
+
+    resumed = client.get(
+        "/forecast",
+        params={"as_of": dt(9, 11).isoformat()},
+    )
+    assert resumed.status_code == 200
+    payload = resumed.json()
+    assert payload["readiness"] == "READY"
+    assert payload["waiting_operation_ids"] == []
+    assert payload["lots"]
+    assert payload["processes"]
 
 
 def test_forecast_rejects_timezone_naive_as_of(tmp_path: Path) -> None:
