@@ -31,8 +31,14 @@ Metrics (per run, all LOTs)
 - On-time delivery rate: share of LOTs with zero final due tardiness.
 - Mean completion: mean over LOTs of regular working hours from the run start
   to the LOT's last FINAL_TEST pass.
-- Overtime: plant minutes actually worked after the regular close on approved
-  overtime days (regular close to the last work end inside the window).
+- Overtime (extra operating time): per approved overtime day, minutes from
+  the regular close (17:00) to the last work end inside the window. Idle gaps
+  in that span count; it is not the sum of busy work minutes.
+
+Scope: the virtual terminal talks HTTP to the FastAPI app through an
+in-process TestClient (same routing, validation, serialisation). A separate
+test runs the same closed loop over a real localhost socket (uvicorn +
+httpx). Neither involves the Pico 2 WH hardware, which is not integrated.
 """
 
 from __future__ import annotations
@@ -70,13 +76,14 @@ CONDITIONS: dict[str, dict[str, float]] = {
     "NORMAL": {"duration_sigma": 0.15, "estimate_sigma": 0.2},
     # true work times 20% longer than the standards on average
     "SLOW": {"duration_sigma": 0.15, "estimate_sigma": 0.2, "duration_multiplier": 1.2},
-    # stoppages (half a day lost on 3% of attempts) and 8% FINAL_TEST failures
-    "HOLD_REWORK": {
+    # mid-work stoppages (3% of attempts need 240 more working minutes; a delay
+    # model, not HOLD/RESUME events) and 8% FINAL_TEST failures with rework
+    "STOPPAGE_REWORK": {
         "duration_sigma": 0.15,
         "estimate_sigma": 0.2,
         "final_test_fail_probability": 0.08,
-        "hold_probability": 0.03,
-        "hold_minutes": 240.0,
+        "stoppage_probability": 0.03,
+        "stoppage_minutes": 240.0,
     },
 }
 POLICIES = (
@@ -159,8 +166,14 @@ def truth_for(condition: str, seed: int) -> TruthModel:
     return TruthModel(seed=seed, **CONDITIONS[condition])
 
 
-def worked_overtime_minutes(result: RunResult, calendar: WorkCalendar) -> float:
-    """Plant minutes worked after the regular close on overtime days."""
+def overtime_open_minutes(result: RunResult, calendar: WorkCalendar) -> float:
+    """Extra operating time on approved overtime days (D078 definition).
+
+    Per day: from the regular close (17:00) to the last work end inside the
+    overtime window, i.e. how long the plant had to stay open. Idle gaps
+    inside that span count, because staff are paid for staying; this is not
+    the sum of busy work minutes. The candidate KPI uses the same definition.
+    """
 
     total = 0.0
     for day in calendar.overtime_days:
@@ -248,7 +261,7 @@ def execute(spec: RunSpec) -> RunRow:
         }
         result = harness.run(ApprovalPolicy(spec.policy))
         outcomes = lot_outcomes(result, gates=gates, dues=dues, regular=regular, started_at=started)
-        overtime = worked_overtime_minutes(result, harness.plant.calendar)
+        overtime = overtime_open_minutes(result, harness.plant.calendar)
     return RunRow(
         condition=spec.condition,
         policy=spec.policy,

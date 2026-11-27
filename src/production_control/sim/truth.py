@@ -50,9 +50,13 @@ class TruthModel:
       estimate. 0 means workers estimate the true remaining time exactly.
     - ``duration_multiplier``: systematic slowdown (> 1) of every true work
       time relative to the standard, applied on top of the random spread.
-    - ``hold_probability`` / ``hold_minutes``: chance that an attempt is
-      stopped mid-work (material, equipment) and loses ``hold_minutes`` of
-      working time before it can finish.
+    - ``stoppage_probability`` / ``stoppage_minutes``: chance that an attempt
+      is stopped mid-work (material, equipment) and needs ``stoppage_minutes``
+      more working time before it finishes. This is a *delay model*: the
+      operation stays RUNNING and keeps its resources; no HOLD / RESUME events
+      are sent. The system notices it only as a Pace overrun and through the
+      worker's expected-remaining answer. HOLD / RESUME event handling is
+      tested separately with the API, not in these experiments.
     """
 
     seed: int = 0
@@ -61,8 +65,8 @@ class TruthModel:
     extra_minutes: Mapping[tuple[str, int], float] = field(default_factory=dict)
     estimate_sigma: float = 0.0
     duration_multiplier: float = 1.0
-    hold_probability: float = 0.0
-    hold_minutes: float = 0.0
+    stoppage_probability: float = 0.0
+    stoppage_minutes: float = 0.0
 
     def __post_init__(self) -> None:
         if self.duration_sigma < 0:
@@ -73,10 +77,10 @@ class TruthModel:
             raise ValueError("estimate_sigma must be 0 or greater")
         if self.duration_multiplier <= 0:
             raise ValueError("duration_multiplier must be greater than 0")
-        if not 0 <= self.hold_probability < 1:
-            raise ValueError("hold_probability must be in [0, 1)")
-        if self.hold_minutes < 0:
-            raise ValueError("hold_minutes must be 0 or greater")
+        if not 0 <= self.stoppage_probability < 1:
+            raise ValueError("stoppage_probability must be in [0, 1)")
+        if self.stoppage_minutes < 0:
+            raise ValueError("stoppage_minutes must be 0 or greater")
         for key, minutes in self.extra_minutes.items():
             if minutes < 0:
                 raise ValueError(f"extra_minutes must be 0 or greater: {key}")
@@ -99,11 +103,13 @@ class TruthModel:
             multiplier = exp(sigma * z - sigma * sigma / 2)
         sampled = max(1, round(standard_minutes * self.duration_multiplier * multiplier))
         extra = self.extra_minutes.get((unit_operation_id, attempt_no), 0.0)
-        if self.hold_probability > 0 and (
+        # The draw key stays "hold" so results recorded before the rename are
+        # reproduced exactly.
+        if self.stoppage_probability > 0 and (
             keyed_uniform(self.seed, unit_operation_id, attempt_no, "hold")
-            < self.hold_probability
+            < self.stoppage_probability
         ):
-            extra += self.hold_minutes
+            extra += self.stoppage_minutes
         return float(sampled + round(extra))
 
     def final_test_passes(self, *, unit_operation_id: str, attempt_no: int) -> bool:

@@ -15,12 +15,12 @@
       "estimate_sigma": 0.2,
       "duration_multiplier": 1.2
     },
-    "HOLD_REWORK": {
+    "STOPPAGE_REWORK": {
       "duration_sigma": 0.15,
       "estimate_sigma": 0.2,
       "final_test_fail_probability": 0.08,
-      "hold_probability": 0.03,
-      "hold_minutes": 240.0
+      "stoppage_probability": 0.03,
+      "stoppage_minutes": 240.0
     }
   },
   "policies": [

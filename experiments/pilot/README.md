@@ -20,3 +20,22 @@ python -m production_control.sim.experiment --reps 10 --out experiments/pilot
 
 This is the pilot used to check the experiment before the 30-replication run;
 the presentation uses the 30-replication results.
+
+## Terms (updated after review)
+
+- `STOPPAGE_REWORK` was recorded as `HOLD_REWORK`; only the label changed.
+  It is a delay model: 3% of attempts need 240 more working minutes while the
+  operation stays RUNNING. No HOLD / RESUME events are sent, so these results
+  test replanning under extra delay, not HOLD event handling. The random draws
+  are unchanged (same key), and re-summarising `runs.jsonl` reproduces
+  `summary.csv` exactly.
+- `overtime_minutes` is extra operating time: per overtime day, from 17:00 to
+  the last work end in the window, idle gaps included. It is not the sum of
+  busy work minutes.
+- The virtual terminal used FastAPI's in-process TestClient. Real-socket
+  operation is covered by `tests/integration/test_closed_loop_over_network.py`
+  (uvicorn + httpx on localhost). The Pico 2 WH hardware is not integrated.
+- Final due tardiness assumes shipping inspection and dispatch take exactly 3
+  working days after the last FINAL_TEST pass, for every LOT, with no queue at
+  inspection. It is an assumption, not measured data; shipping-inspection
+  entry delay needs no assumption.
