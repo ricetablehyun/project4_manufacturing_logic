@@ -50,3 +50,41 @@ def test_demo_overtime_option_adds_overtime_candidates(tmp_path: Path) -> None:
     assert rows["EDD+OT"] == (1, 177.0, 120.0, ["2026-10-22"])
     assert rows["FCFS+OT"] == (1, 177.0, 360.0, ["2026-10-22", "2026-10-23", "2026-10-26"])
     assert payload["recommended_candidate_id"] == "EDD+OT"
+
+
+def test_approving_the_overtime_candidate_opens_the_window_and_updates_the_forecast(
+    tmp_path: Path,
+) -> None:
+    """The demo's approval path: EDD+OT -> plan v2, 10/22 17-19 open, Gate -177."""
+
+    database_path = initialize_demo_database(tmp_path / "demo.db")
+    reference_time = prepare_delay_smoke(database_path)
+    client = TestClient(create_demo_app(database_path, overtime_end=time(19, 0)))
+    as_of = {"as_of": reference_time.isoformat()}
+    client.patch(
+        f"/unit-operations/{DEMO_SNAPSHOT_RUNNING_OPERATION_ID}/expected-remaining",
+        json={"expected_remaining_minutes": 480},
+    )
+    snapshot = client.post("/replan-candidates", params=as_of).json()
+
+    approval = client.post(
+        "/replan-approvals",
+        json={
+            "parent_plan_id": snapshot["parent_plan_id"],
+            "candidate_id": "EDD+OT",
+            "candidate_as_of": snapshot["as_of"],
+        },
+    )
+
+    assert approval.status_code == 201
+    assert approval.json()["version"] == 2
+    windows = client.get("/work-calendar", params=as_of).json()["overtime"]
+    assert [(row["start_at"], row["end_at"]) for row in windows] == [
+        ("2026-10-22T17:00:00+09:00", "2026-10-22T19:00:00+09:00")
+    ]
+    forecast = client.get("/forecast", params=as_of).json()
+    gate = next(row for row in forecast["gates"] if row["lot_id"] == "LOT-101")
+    # Overtime shortens the delay but cannot remove it: the LOT stays URGENT.
+    assert gate["slack_minutes"] == -177
+    assert gate["risk_level"] == "URGENT"
+    assert forecast["plan_version"] == 2

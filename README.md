@@ -1,94 +1,90 @@
 # project4_manufacturing_logic
 
-현장 작업실적을 기반으로 LOT 생산진도를 모니터링하고, 납기/검사 Gate 위험 발생 시 재계획 후보를 비교하는 V1 생산관리 프로젝트입니다.
-
-## Core idea
+현장 작업실적(Unit 단위)으로 LOT 생산진도를 추정하고, 출하검사 Gate에 늦을 위험이 생기면 재계획 후보를 계산해 관리자 승인을 받은 뒤, 승인된 계획대로 현장 작업지시가 바뀌는 **생산 진도관리·재계획 시스템**입니다. 공학프로젝트4 기말 버전입니다.
 
 ```text
-Unit-level actual events
-        ↓
-LOT × Process pace
-        ↓
-Remaining work
-        ↓
-Finite-capacity forecast
-        ↓
-Gate risk
-        ↓
-FCFS / EDD / Slack / CR replanning candidates
+Unit 작업실적(WorkEvent) ─▶ LOT×공정 Pace ─▶ 유한용량 Forecast ─▶ Gate 위험 판단
+        ▲                                                            │ URGENT
+        │                                                            ▼
+  현장 작업지시(/work-orders) ◀── 승인된 계획 ◀── 관리자 승인 ◀── 재계획 후보
+                                                      FCFS / EDD / Slack / CR (+ 추가근무)
 ```
 
-- 계획/납기 관리 단위: LOT
-- 실행/실적 기록 단위: Unit
-- Forecast: LOT × 공정 Pace 기반
-- 자원 제약: Worker Pool, Tuning Station, Test Station
-- 재작업: FINAL_TEST → TUNING → FINAL_TEST
-- 공식 계획: Baseline / Forecast / Replan 분리
+## 구현 범위
 
-## Implementation order
+| 구분 | 내용 | 근거 |
+|---|---|---|
+| 구현 | 작업실적 입력(START/HOLD/RESUME/COMPLETE/PASS/FAIL), 중복 전송 무시 | `tests/integration/test_work_event_api.py` |
+| 구현 | Pace 기반 Forecast, 작업자 잔여시간 입력, 재작업(FINAL_TEST→TUNING→FINAL_TEST) | `test_live_forecast_*`, `test_rework_pace_duration.py` |
+| 구현 | 재계획 후보 4방법 + 평일 17~19시 추가근무 후보(D078), D029 순위 | `test_replan_candidate_api.py`, `test_overtime_replan.py` |
+| 구현 | 승인 → 새 계획 → 현장 작업지시 변경(폐루프) | `test_closed_loop.py`, `test_closed_loop_over_network.py` |
+| 구현 | 가상 현장 시뮬레이터와 반복 실험 (810회) | `experiments/main30/` |
+| 구현 | Streamlit 관리자 화면: 생산현황·간트차트·실적 입력·재계획·실험 결과 | `src/production_control/ui/` |
+| 미구현 | Raspberry Pi Pico 2 WH 하드웨어 단말 연동 | 가상 단말(HTTP)로만 검증 |
+| 미구현 | 인증·권한, 외부망 배포, 설비·자원 관리 UI | 로컬 데모 범위 |
 
-1. Core calculation + pytest
-2. Calendar / Resource finite scheduling
-3. Priority rules / Gate risk / Replanning
-4. SQLite persistence
-5. FastAPI
-6. Streamlit dashboard
-7. Raspberry Pi Pico 2 WH terminal
-
-> 현재 단계: Milestone 6 Streamlit dashboard — 중간발표용 실적 입력 + 재계획 승인 UI 연결.
-
-## Local demo runtime
-
-D062는 **파일 SQLite + 명시적 초기화/reset** 방식을 사용합니다. 서버 시작은 DB를 자동 생성하거나 seed하지 않습니다.
-
-먼저 개발 의존성을 설치합니다.
+## 빠른 시작
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev]"          # 그림 생성까지 하려면 ".[dev,figures]"
+python -m pytest                           # 384 tests
 ```
 
-### 1. Demo DB 초기화
-
-기본 경로는 `data/demo.db`입니다. 기존 DB가 있으면 `--reset` 없이는 덮어쓰지 않습니다. `--reset`은 DB 파일을 교체하므로 FastAPI 프로세스를 종료한 상태에서 실행합니다.
+### 시연 환경 (중간발표 지연 상황)
 
 ```bash
-python -m production_control.demo.init_db --reset
-```
+python -m production_control.demo.init_db --reset          # data/demo.db 초기화
+python -m production_control.demo.prepare_delay_smoke      # U030 튜닝 RUNNING, 10/22 13:17
 
-다른 경로를 쓰려면 `--db` 또는 `PRODUCTION_CONTROL_DB_PATH`를 사용합니다.
+# 터미널 1: API (추가근무 후보를 켜려면 PRODUCTION_CONTROL_OVERTIME_END 지정)
+PRODUCTION_CONTROL_OVERTIME_END=19:00 \
+python -m uvicorn production_control.api.runtime:app --host 127.0.0.1 --port 8000
 
-```bash
-python -m production_control.demo.init_db --db data/another-demo.db --reset
-export PRODUCTION_CONTROL_DB_PATH=data/another-demo.db
-```
-
-### 2. FastAPI 실행
-
-```bash
-python -m uvicorn production_control.api.runtime:app --host 127.0.0.1 --port 8000 --reload
-```
-
-기본 API 주소는 `http://127.0.0.1:8000`입니다. DB가 초기화되지 않았다면 runtime은 자동 seed하지 않고 시작에 실패합니다.
-
-### 3. Streamlit 관리자 UI 실행
-
-다른 터미널에서 localhost에만 바인딩해 실행합니다.
-
-```bash
+# 터미널 2: 관리자 화면 (데모 데이터가 2026년 10월이므로 시연 시각을 고정)
+PRODUCTION_CONTROL_DEMO_TIME=2026-10-22T13:17:00+09:00 \
 python -m streamlit run src/production_control/ui/overview.py --server.address 127.0.0.1
 ```
 
-관리자 UI는 FastAPI HTTP 경계만 사용하며 SQLite/SQLAlchemy에 직접 접근하지 않습니다.
+- 두 환경변수를 지정하지 않으면 중간발표와 똑같이 동작합니다(추가근무 후보 없음, 실제 시계 사용).
+- 시연 흐름: 현장 실적 입력에서 U030 예상 잔여시간 480분 입력 → 생산현황에서 LOT-001 출하검사 진입 4시간 57분 지연(URGENT) 확인 → 재계획에서 후보 계산 → 추가근무안 승인 → 지연이 2시간 57분으로 줄어든 Forecast 확인. 이 수치는 `tests/integration/test_midterm_kpi_regression.py`, `tests/integration/test_demo_overtime_option.py`가 고정합니다.
+- 모든 서버는 `127.0.0.1`에만 바인딩합니다(`docs/security/local_demo.md`).
+- 화면의 LOT 코드(LOT-001~003)는 내부 ID(LOT-101~103)와 같은 LOT입니다.
 
-`python -m streamlit`을 사용하면 활성화된 가상환경의 Python으로 Streamlit을 실행하므로, Conda의 전역 `streamlit` 실행기가 먼저 잡히는 환경 충돌을 피할 수 있습니다.
-
-FastAPI 주소를 변경하려면 다음 환경변수를 사용합니다.
+### 반복 실험과 그림 재현
 
 ```bash
-export PRODUCTION_CONTROL_API_URL=http://127.0.0.1:8000
-python -m streamlit run src/production_control/ui/overview.py --server.address 127.0.0.1
+python -m production_control.sim.experiment --reps 30 --workers 4 --out experiments/main30   # 약 3시간, 중단 시 같은 명령으로 이어서 실행
+python -m production_control.sim.figures --experiment experiments/main30 --out docs/figures
 ```
 
-로컬 데모에서는 `0.0.0.0` 바인딩, 포트포워딩, 외부 방화벽 예외를 사용하지 않습니다.
+결과와 해석은 [`experiments/main30/README.md`](experiments/main30/README.md)에 있습니다. 요약하면 다음과 같습니다(30회 반복, 출하검사 진입 지연 평균).
 
-Demo DB는 로컬 파일로 유지되므로 WorkEvent 입력이나 Replan 승인 결과가 서버 실행 중/재시작 후에도 남습니다. 초기 Fixture 상태로 되돌릴 때만 FastAPI를 종료하고 init 명령의 `--reset`을 다시 실행합니다.
+| 조건 | 계획 유지(KEEP) | EDD 재계획 |
+|---|---|---|
+| 정상 | 190분 | 0분 (30회 모두 0) |
+| 작업시간 +20% | 1,523분 | 0분 (30회 모두 0) |
+| 작업정지·재작업 | 2,433분 | 14.6분 (30회 중 5회 지연) |
+
+추가근무는 지연이 남는 방법(CR, FCFS 등)에서 지연을 줄이지만, 정상 조건의 EDD처럼 이미 지연이 0인 경우에도 예측이 비관적이라 평균 108분을 엽니다. 810회 모두 공장 규칙 위반 0건, 최종 납기 지각 0건입니다.
+
+## 용어와 지표
+
+- **출하검사 진입 지연**: LOT의 마지막 최종시험 합격 시각 − 출하검사 Gate 예정 시작(`InspectionGate.planned_at`). 시스템의 재계획 KPI(지연 LOT 수, 총 지연시간)가 이 값을 씁니다. 중간발표의 "4시간 57분"도 이 지표입니다.
+- **최종 납기 지각**: 출하검사 종료(출하) 시각 − 고객 납기(`Lot.due_at`). 출하검사 규칙은 `core/shipping_inspection.py` 하나를 대시보드와 실험이 함께 씁니다. 검사는 Gate 예정 시각에 시작하고, 생산이 늦으면 완료 후 다음 근무시각에 시작합니다. 시작일을 포함해 3근무일째 17:00에 끝납니다. 검사 자체의 대기·불합격·지연은 모델링하지 않습니다.
+- **추가 가동시간**: 추가근무 날마다 17:00부터 추가근무 창 안의 마지막 작업 종료까지입니다. 중간 대기를 포함하며, 순수 작업시간의 합이 아닙니다.
+- **작업정지·재작업 조건(STOPPAGE_REWORK)**: 3%의 작업에 240분을 더하는 지연 모델과 8%의 최종시험 불합격입니다. HOLD/RESUME 이벤트는 보내지 않습니다. HOLD/RESUME 처리는 API 테스트로 따로 검증합니다.
+
+## 한계
+
+- Pico 2 WH 하드웨어는 연동하지 않았습니다. 가상 단말이 같은 HTTP API를 호출합니다. 반복 실험은 FastAPI TestClient(프로세스 내부)를 쓰고, 실제 TCP 소켓은 `test_closed_loop_over_network.py`에서 따로 확인합니다.
+- 가상 현장의 실제 작업시간 분포(로그정규, σ 0.15)와 교란 확률은 가정값이며 실제 공장 데이터로 보정하지 않았습니다.
+- 재계획은 결정 시점의 Forecast로 고릅니다. 예측이 비관적이면 필요 없는 추가근무를 고를 수 있습니다(실험 결과에 그대로 보고).
+- 데모 고객 납기는 출하검사 이후로 넉넉하게 잡힌 예시 날짜라, 이 세계에서는 최종 납기 지각이 나타나지 않았습니다.
+
+## 문서
+
+- `docs/verification.md`: 주장별 검증 근거(테스트·실험 파일·명령)
+- `docs/api/`: API 계약
+- `docs/midterm_demo_scope.md`: 중간발표 범위와 식별자 규칙
+- `experiments/pilot/`, `experiments/main30/`: 실험 원자료와 해석
+- `docs/figures/`: 보고서·발표용 그림(위 명령으로 재생성)
