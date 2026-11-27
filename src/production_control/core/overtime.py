@@ -5,7 +5,8 @@ time of working days by a fixed window (+2 hours by default), weekdays first,
 from the replanning moment through the last day that can still help a late
 Gate. Opened days whose window no scheduled work uses are dropped, and the KPI
 counts only the overtime that work actually uses on each day: from the regular
-close to the last resource release inside the window.
+close to the last resource release inside the window. This is extra operating
+time (how long the plant stays open), not the sum of busy work minutes.
 """
 
 from collections.abc import Iterable

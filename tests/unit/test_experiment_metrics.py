@@ -9,9 +9,9 @@ from production_control.sim.experiment import (
     RunRow,
     lot_outcomes,
     mean_ci,
+    overtime_open_minutes,
     plan_runs,
     summarise,
-    worked_overtime_minutes,
 )
 from production_control.sim.manager import ApprovalPolicy
 from production_control.sim.plant import ExecutionRecord
@@ -92,7 +92,8 @@ def test_gate_delay_and_final_due_tardiness_are_separate_metrics() -> None:
     assert by_lot["LOT-A"].completion_working_hours == 3
 
 
-def test_worked_overtime_counts_only_work_after_the_regular_close() -> None:
+def test_overtime_is_extra_operating_time_not_busy_minutes() -> None:
+    """17:00-17:45 work, idle 5 min, 17:50-18:20 work: open 80 min, busy 75."""
     calendar = WorkCalendar().with_overtime([date(2026, 10, 22)], time(19, 0))
     result = FakeResult(
         FakePlant(
@@ -104,7 +105,7 @@ def test_worked_overtime_counts_only_work_after_the_regular_close() -> None:
         )
     )
 
-    assert worked_overtime_minutes(result, calendar) == 80
+    assert overtime_open_minutes(result, calendar) == 80
 
 
 def _row(policy: str, seed: int, delay: float, overtime: bool = False) -> RunRow:
@@ -139,7 +140,7 @@ def test_mean_ci_uses_student_t() -> None:
 
 def test_condition_disturbances_are_keyed_and_slow_down_on_average() -> None:
     slow = TruthModel(seed=3, duration_multiplier=1.2)
-    held = TruthModel(seed=3, hold_probability=0.5, hold_minutes=240)
+    held = TruthModel(seed=3, stoppage_probability=0.5, stoppage_minutes=240)
     ids = [f"OP-{index}" for index in range(200)]
 
     assert all(
