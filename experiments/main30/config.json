@@ -31,7 +31,7 @@
     "CR"
   ],
   "overtime_end": "19:00:00",
-  "inspection_lead_working_minutes": 1440,
+  "shipping_inspection_rule": "start = max(Gate planned start, next working moment after last FINAL_TEST pass); finish = 17:00 of the 3rd weekday counting the start day",
   "forecast_config": {
     "calendar_id": "CALENDAR-NORMAL",
     "pace_min_samples": 3,
@@ -70,8 +70,8 @@
     30
   ],
   "runs": 810,
-  "git_commit": "3a7ff6e97f9dd08566358d2cb59b8758c40c0618",
+  "git_commit": "fecca51d0f694e8c6cd37924d72ee674d81e3785",
   "python": "3.13.18",
   "platform": "Linux-6.18.44-fc-v880-x86_64-with-glibc2.39",
-  "wall_seconds": 134.8
+  "wall_seconds": 0.1
 }

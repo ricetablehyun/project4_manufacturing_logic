@@ -76,19 +76,19 @@ def test_gate_delay_and_final_due_tardiness_are_separate_metrics() -> None:
         dues={"LOT-A": at(27, 17), "LOT-B": at(23, 17)},
         regular=regular,
         started_at=at(22, 9),
-        inspection_lead_minutes=3 * 8 * 60,
     )
     by_lot = {item.lot_id: item for item in outcomes}
 
     assert by_lot["LOT-A"].gate_delay_minutes == 120
-    # Shipped 3 working days after 10/22 12:00 = 10/27 12:00, before its due.
-    assert by_lot["LOT-A"].shipped_at == at(27, 12)
+    # Late production: inspection starts at completion (Thu 10/22 12:00) and
+    # ends 17:00 of the 3rd weekday counting Thursday = Mon 10/26 17:00.
+    assert by_lot["LOT-A"].shipped_at == at(26, 17)
     assert by_lot["LOT-A"].due_tardiness_minutes == 0
     assert by_lot["LOT-B"].gate_delay_minutes == 0
-    # LOT-B ships 10/27 10:00 but was due 10/23 17:00.
-    assert by_lot["LOT-B"].due_tardiness_minutes == pytest.approx(
-        (at(27, 10) - at(23, 17)).total_seconds() / 60
-    )
+    # Early production waits for the Gate (Fri 10/23 09:00) -> Tue 10/27 17:00,
+    # four days after its 10/23 17:00 due.
+    assert by_lot["LOT-B"].shipped_at == at(27, 17)
+    assert by_lot["LOT-B"].due_tardiness_minutes == 4 * 24 * 60
     assert by_lot["LOT-A"].completion_working_hours == 3
 
 
@@ -202,3 +202,26 @@ def test_a_failed_run_is_recorded_and_the_rest_still_run(tmp_path, monkeypatch) 
     failures = json.loads((tmp_path / "failures.json").read_text())
     assert [(item["policy"], item["overtime"]) for item in failures] == [("EDD", False)]
     assert "boom" in failures[0]["error"]
+
+
+def test_rederive_due_metrics_matches_the_dashboard_inspection_rule() -> None:
+    import json
+
+    from production_control.sim.experiment import rederive_due_metrics
+
+    detail = [
+        {  # finished after 17:00 on Thu: inspection starts Fri 09:00 -> Tue 17:00
+            "lot_id": "LOT-A",
+            "completed_at": at(22, 18).isoformat(),
+            "gate_at": at(22, 9).isoformat(),
+            "shipped_at": "stale",
+            "due_at": at(26, 17).isoformat(),
+        },
+    ]
+    row = replace(_row("KEEP", 1, 540.0), lot_detail=json.dumps(detail))
+
+    rederived = rederive_due_metrics(row)
+
+    assert json.loads(rederived.lot_detail)[0]["shipped_at"] == at(27, 17).isoformat()
+    assert rederived.due_tardiness_minutes == 24 * 60
+    assert rederived.late_due_lots == 1 and rederived.on_time_rate == 0.0
