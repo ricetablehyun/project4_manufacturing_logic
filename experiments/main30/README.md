@@ -59,10 +59,12 @@ What the data supports:
   happens later. The policy chooses on the forecast, so it buys overtime that
   turns out unnecessary.
 - CR re-approves often (3.2-4.3 approvals per run versus 1-2 for EDD/SLACK).
-- Final due tardiness (with the 3-working-day inspection assumption below)
-  appears only in STOPPAGE_REWORK KEEP (72.9 ± 103.6, in 2 of 30 runs) and FCFS
-  (36.5 ± 74.7, in 1 of 30 runs). Both CIs include 0. This is a rare-event
-  observation, not a significant difference.
+- Final due tardiness is 0 in all 810 runs under the system's inspection rule
+  (below). The tightest cases are STOPPAGE_REWORK LOT-103 (ID; shown as LOT-003)
+  under KEEP (2 runs) and FCFS (1 run), which ship at exactly 17:00 on the due
+  date. A further 26 KEEP/FCFS(+OT) runs ship 24 hours before the due time.
+  Replanning rules never come within a day. In this demo world the customer due
+  dates leave enough room, so the Gate entry delay is the binding measure.
 
 ## Terms and assumptions
 
@@ -71,9 +73,17 @@ What the data supports:
   and are reworked. No HOLD / RESUME events are sent.
 - Shipping-inspection entry delay = completion of the LOT's last FINAL_TEST pass
   minus `InspectionGate.planned_at`, in wall-clock minutes. It needs no assumption.
-- Final due tardiness assumes shipping inspection and dispatch take exactly 3
-  working days after the last FINAL_TEST pass, for every LOT, with no queue. It is
+- Final due tardiness uses the system's shipping-inspection rule
+  (`core/shipping_inspection.py`, also used by the dashboard). Inspection starts at
+  the Gate's planned start, or at the next working moment after the last FINAL_TEST
+  pass if production is late. It finishes at 17:00 of the third weekday, counting
+  the start day. The LOT ships then. That inspection never queues, fails or slips is
   an assumption, not measured data.
+- Revision note: the first version of these files assumed 24 working hours of
+  inspection from the last FINAL_TEST pass. That differed from the dashboard's rule
+  and showed tardiness in 3 runs. The final-due fields were re-derived from each
+  run's recorded `lot_detail` with the system rule, without re-running anything.
+  All other fields are unchanged; see the git history of this folder.
 - The virtual terminal uses FastAPI's in-process TestClient. Real-socket
   operation is covered by `tests/integration/test_closed_loop_over_network.py`.
   The Pico 2 WH hardware is not integrated.

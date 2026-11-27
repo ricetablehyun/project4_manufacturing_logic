@@ -14,9 +14,10 @@ python -m production_control.sim.experiment --reps 10 --out experiments/pilot
 - Files: `runs.csv` (one row per run), `summary.csv` (mean, 95% CI, paired
   difference vs KEEP per condition), `config.json` (parameters, commit),
   `runs.jsonl` (resume journal).
-- Final due tardiness assumes 3 working days of shipping inspection after the
-  last FINAL_TEST pass. Shipping-inspection entry delay uses the Gate's
-  planned start and needs no assumption.
+- Final due tardiness now uses the system's shipping-inspection rule (see
+  `experiments/main30/README.md`); the fields were re-derived from `lot_detail`.
+  Shipping-inspection entry delay uses the Gate's planned start and needs no
+  assumption.
 
 This is the pilot used to check the experiment before the 30-replication run;
 the presentation uses the 30-replication results.
@@ -35,7 +36,6 @@ the presentation uses the 30-replication results.
 - The virtual terminal used FastAPI's in-process TestClient. Real-socket
   operation is covered by `tests/integration/test_closed_loop_over_network.py`
   (uvicorn + httpx on localhost). The Pico 2 WH hardware is not integrated.
-- Final due tardiness assumes shipping inspection and dispatch take exactly 3
-  working days after the last FINAL_TEST pass, for every LOT, with no queue at
-  inspection. It is an assumption, not measured data; shipping-inspection
-  entry delay needs no assumption.
+- Final due tardiness assumes inspection follows the system rule exactly (no
+  queue, failure or slip). It is an assumption, not measured data;
+  shipping-inspection entry delay needs no assumption.

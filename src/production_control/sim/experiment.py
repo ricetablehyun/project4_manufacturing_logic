@@ -24,10 +24,13 @@ Metrics (per run, all LOTs)
 - Shipping-inspection entry delay: wall-clock minutes from the Gate's planned
   start (InspectionGate.planned_at) to the LOT's last FINAL_TEST pass, 0 if on
   time. This is the system's own tardiness definition.
-- Final due tardiness: the LOT ships after shipping inspection, assumed to
-  take ``INSPECTION_LEAD_WORKING_MINUTES`` of regular working time after the
-  last FINAL_TEST pass; tardiness against Lot.due_at, 0 if on time. The lead
-  time is an assumption stated with every result.
+- Final due tardiness: the LOT ships when shipping inspection finishes, under
+  the system's own inspection rule (``core.shipping_inspection``, the same rule
+  the dashboard shows): inspection starts at the Gate's planned start, or at the
+  next working moment after the last FINAL_TEST pass if production is late, and
+  finishes at 17:00 of the third weekday counting the start day. Tardiness is
+  against Lot.due_at, 0 if on time. That inspection itself is never delayed or
+  failed is an assumption stated with every result.
 - On-time delivery rate: share of LOTs with zero final due tardiness.
 - Mean completion: mean over LOTs of regular working hours from the run start
   to the LOT's last FINAL_TEST pass.
@@ -61,6 +64,7 @@ from pathlib import Path
 from statistics import NormalDist, mean, stdev
 
 from production_control.core.calendar_engine import WorkCalendar
+from production_control.core.shipping_inspection import shipping_inspection_expected_finish
 from production_control.sim.harness import DEFAULT_FORECAST_CONFIG, build_harness
 from production_control.sim.manager import ApprovalPolicy
 from production_control.sim.runner import RunResult
@@ -68,7 +72,10 @@ from production_control.sim.truth import TruthModel
 
 DEMO_START_ISO = "2026-10-22T13:00:00+09:00"
 BASELINE_LOT_ORDER = ("LOT-101", "LOT-102", "LOT-103")
-INSPECTION_LEAD_WORKING_MINUTES = 3 * 8 * 60  # 3 working days (assumption)
+INSPECTION_RULE = (
+    "start = max(Gate planned start, next working moment after last FINAL_TEST pass); "
+    "finish = 17:00 of the 3rd weekday counting the start day"
+)
 OVERTIME_END = time(19, 0)
 
 CONDITIONS: dict[str, dict[str, float]] = {
@@ -192,6 +199,45 @@ def overtime_open_minutes(result: RunResult, calendar: WorkCalendar) -> float:
     return total
 
 
+def shipped_at(*, completed_at: datetime, gate_at: datetime, regular: WorkCalendar) -> datetime:
+    """When the LOT leaves shipping inspection (see ``INSPECTION_RULE``)."""
+
+    start = max(gate_at, regular.next_work_start(completed_at))
+    return shipping_inspection_expected_finish(start)
+
+
+def rederive_due_metrics(row: RunRow, regular: WorkCalendar | None = None) -> RunRow:
+    """Recompute the final-due fields of a recorded run from its ``lot_detail``.
+
+    Completion, Gate and due times are recorded per LOT, so the inspection rule
+    can be applied again without re-running the closed loop.
+    """
+
+    calendar = regular or WorkCalendar()
+    lots = json.loads(row.lot_detail)
+    tardiness = []
+    for lot in lots:
+        due = datetime.fromisoformat(lot["due_at"])
+        shipped = shipped_at(
+            completed_at=datetime.fromisoformat(lot["completed_at"]),
+            gate_at=datetime.fromisoformat(lot["gate_at"]),
+            regular=calendar,
+        )
+        lot["shipped_at"] = shipped.isoformat()
+        tardiness.append(max(0.0, (shipped - due).total_seconds() / 60.0))
+    return replace(
+        row,
+        late_due_lots=sum(1 for value in tardiness if value > 0),
+        due_tardiness_minutes=sum(tardiness),
+        on_time_rate=(
+            sum(1 for value in tardiness if value == 0) / len(tardiness)
+            if tardiness
+            else float("nan")
+        ),
+        lot_detail=json.dumps(lots),
+    )
+
+
 def lot_outcomes(
     result: RunResult,
     *,
@@ -199,7 +245,6 @@ def lot_outcomes(
     dues: dict[str, datetime],
     regular: WorkCalendar,
     started_at: datetime,
-    inspection_lead_minutes: float = INSPECTION_LEAD_WORKING_MINUTES,
 ) -> list[LotOutcome]:
     completed: dict[str, datetime] = {}
     for record in result.plant.records:
@@ -213,7 +258,7 @@ def lot_outcomes(
         if done is None:
             # A LOT finished before the run started has no records here.
             continue
-        shipped = regular.add_working_minutes(done, inspection_lead_minutes)
+        shipped = shipped_at(completed_at=done, gate_at=gates[lot_id], regular=regular)
         outcomes.append(
             LotOutcome(
                 lot_id=lot_id,
@@ -416,8 +461,15 @@ def run_experiment(
     if journal.exists():
         for line in journal.read_text(encoding="utf-8").splitlines():
             if line.strip():
-                row = RunRow(**json.loads(line))
+                # Final-due fields are re-derived with the current inspection
+                # rule, so a rule change never leaves stale values behind.
+                row = rederive_due_metrics(RunRow(**json.loads(line)))
                 done[RunSpec(row.condition, row.policy, row.overtime, row.seed)] = row
+        rewritten = journal.with_name(journal.name + ".tmp")
+        rewritten.write_text(
+            "".join(json.dumps(asdict(row)) + "\n" for row in done.values()), encoding="utf-8"
+        )
+        rewritten.replace(journal)
     todo = [spec for spec in specs if spec not in done]
     rows: list[RunRow] = [done[spec] for spec in specs if spec in done]
     if progress and done:
@@ -478,7 +530,7 @@ def run_experiment(
                 "conditions": CONDITIONS,
                 "policies": [policy.value for policy in POLICIES],
                 "overtime_end": OVERTIME_END.isoformat(),
-                "inspection_lead_working_minutes": INSPECTION_LEAD_WORKING_MINUTES,
+                "shipping_inspection_rule": INSPECTION_RULE,
                 "forecast_config": {
                     "calendar_id": DEFAULT_FORECAST_CONFIG.calendar_id,
                     "pace_min_samples": DEFAULT_FORECAST_CONFIG.pace_min_samples,
