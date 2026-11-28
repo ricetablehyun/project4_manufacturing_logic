@@ -257,7 +257,7 @@ function dark(s, x, y, w, h, runs, size = 16) {
   const ev = [
     ["승인하면 실행 순서가 바뀐다", "같은 현장에서 승인 전후로 현장이 처리한 LOT 순서가 달라짐", "test_closed_loop.py"],
     ["표준시간이면 Forecast와 일치", "실제 시간 = 표준시간일 때 현장 완료 시각이 승인 시점 Forecast와 같음", "test_closed_loop.py"],
-    ["실제 TCP 소켓에서도 동작", "uvicorn 서버 + httpx 클라이언트로 같은 루프, 이벤트 재전송 포함", "test_closed_loop_over_network.py"],
+    ["실제 TCP 소켓에서도 동작", "localhost의 uvicorn 서버 + httpx 클라이언트로 같은 루프 (Pico Wi-Fi 통신은 아님)", "test_closed_loop_over_network.py"],
   ];
   ev.forEach((e, i) => {
     const y = 2.15 + i * 1.5;
@@ -311,7 +311,7 @@ function dark(s, x, y, w, h, runs, size = 16) {
 {
   const s = content("RESULT", "7. 실험 설계 — 810번의 폐루프 실행", "시나리오 하나가 아니라, 같은 시작 상태에서 교란 조건과 재계획 방법을 바꿔 반복 실행했다.", 9);
   card(s, M, 1.75, 3.9, 2.55, "시작 상태", "중간발표 데모 상태 (10/22 13:00)\n기준계획을 접수순(LOT-001→002→003)으로 둠\n→ 출하검사가 빠른 LOT-003(10/28)이 LOT-002(11/06) 뒤에 배치된, 의도적으로 만든 충돌 상황");
-  card(s, M + 4.15, 1.75, 3.9, 2.55, "교란 조건 3가지", "정상: 작업시간 ±15% 수준 변동\n작업시간 +20%: 모든 작업이 평균 1.2배\n작업정지·재작업: 3% 작업에 +240분, 최종시험 8% 불합격 → 재작업");
+  card(s, M + 4.15, 1.75, 3.9, 2.55, "교란 조건 3가지", "정상: 표준시간 × 로그정규 잡음(σ=0.15), 작업자 추정 오차 σ=0.2\n작업시간 +20%: 모든 작업이 평균 1.2배\n작업정지·재작업: 작업 시도의 3%에 +240분(작업시간 연장 모델), 최종시험 8% 불합격 → 재작업", { bodySize: 11 });
   card(s, M + 8.3, 1.75, 3.93, 2.55, "재계획 방법 9가지", "KEEP(계획 유지)\nFCFS · EDD · Slack · CR  × 추가근무 끔/켬\n관리자는 시스템이 ‘긴급’이라 할 때만 해당 규칙 승인");
   // equation
   const ey = 4.55;
@@ -335,7 +335,7 @@ function dark(s, x, y, w, h, runs, size = 16) {
 
 // ---------------------------------------------------------------- 10 결과 1
 {
-  const s = content("RESULT", "8. 결과① — 재계획은 출하검사 진입 지연을 없앴다", "출하검사 진입 지연 = 생산 완료 − 출하검사 예정 시작 (평균, 막대 위 숫자 · 검은 선 95% 신뢰구간, n=30)", 10);
+  const s = content("RESULT", "8. 결과① — 재계획은 출하검사 진입 지연을 크게 줄였다", "출하검사 진입 지연 = LOT별 max(0, 생산 완료 − 출하검사 예정 시작)의 합 (막대 위 숫자 평균 · 검은 선 95% 신뢰구간, n=30)", 10);
   img(s, "gate_delay.png", M + 0.05, 1.75, 8.9, 2130 / 664);
   const xs = M + 9.3, ws = W - M - xs;
   const stat = (y, big, color, head, body) => {
@@ -369,7 +369,7 @@ function dark(s, x, y, w, h, runs, size = 16) {
   card(s, xs, 1.75, ws, 1.45, "효과: 지연이 남는 규칙", "작업정지 CR 117 → 72분\n정상 FCFS 약 190 → 118분", { fill: C.greenT, line: "BFDFCB", headColor: C.green, bodySize: 12 });
   card(s, xs, 3.4, ws, 1.6, "비용: 불필요한 추가근무", "정상 조건 EDD는 이미 0분인데 평균 108분을 연다 (30회 중 27회 사용)", { fill: C.amberT, line: "EBD3A6", headColor: C.amber, bodySize: 12 });
   dark(s, M, 5.3, W - 2 * M, 1.25, [
-    { text: "원인: 결정 시점의 Forecast가 실제보다 비관적이다.\n", options: { breakLine: true } },
+    { text: "추정 원인: 결정 시점의 Forecast가 실제보다 비관적이었던 것으로 보인다.\n", options: { breakLine: true } },
     { text: "시스템은 예측으로 고르므로, 예측 보정 없이는 ", options: {} },
     { text: "필요 없는 추가근무를 살 수 있다", options: { color: C.gold, bold: true } },
     { text: " — 한계로 보고한다.", options: {} },
@@ -391,15 +391,15 @@ function dark(s, x, y, w, h, runs, size = 16) {
   });
   card(s, M, 3.1, 6.0, 3.5, "출하검사 진입 지연  (시스템의 재계획 KPI)", "", { fill: C.redT, line: "F0C5C1", headColor: C.red });
   t(s, [
-    { text: "생산 완료 − 출하검사 예정 시작. 가정 없이 측정", options: { bullet: true, breakLine: true } },
+    { text: "LOT별 max(0, 생산 완료 − 출하검사 예정 시작)의 합. 출하검사 소요 가정이 필요 없음", options: { bullet: true, breakLine: true } },
     { text: "중간발표의 ‘4시간 57분’도 이 지표 (고객 납기 지각이 아님)", options: { bullet: true, breakLine: true } },
-    { text: "계획 유지 시 평균 190 ~ 2,433분, EDD 0 ~ 15분", options: { bullet: true } },
+    { text: "계획 유지 시 평균 190 ~ 2,433분, EDD 0 ~ 14.6분", options: { bullet: true } },
   ], { x: M + 0.2, y: 3.7, w: 5.6, h: 2.7, fontSize: 13, color: C.ink, paraSpaceAfter: 8 });
   card(s, M + 6.25, 3.1, 5.98, 3.5, "최종 납기 지각", "", { fill: C.tint, line: "C9DDF0", headColor: C.blue });
   t(s, [
-    { text: "출하 − 고객 납기. 출하검사는 대시보드와 같은 규칙(Gate 또는 늦으면 완료 후 시작, 시작일 포함 3근무일)", options: { bullet: true, breakLine: true } },
-    { text: "810회 모두 0. 가장 빠듯한 경우 납기 당일 17:00 출하 (계획 유지 2회, FCFS 1회)", options: { bullet: true, breakLine: true } },
-    { text: "검사 자체의 대기·불합격은 모델링하지 않음 (가정)", options: { bullet: true } },
+    { text: "LOT별 max(0, 출하 − 고객 납기)의 합. 출하검사는 Gate(늦으면 완료 후)에 시작해 시작일 포함 3근무일에 끝난다고 가정 (대시보드와 같은 규칙)", options: { bullet: true, breakLine: true } },
+    { text: "이 가정하에서 810회 모두 0. 가장 빠듯한 경우 납기 당일 17:00 출하 (계획 유지 2회, FCFS 1회)", options: { bullet: true, breakLine: true } },
+    { text: "검사 자체의 대기·불합격은 모델링하지 않음", options: { bullet: true } },
   ], { x: M + 6.45, y: 3.7, w: 5.6, h: 2.7, fontSize: 13, color: C.ink, paraSpaceAfter: 8 });
 }
 
@@ -432,8 +432,8 @@ function dark(s, x, y, w, h, runs, size = 16) {
 {
   const s = content("CONCLUSION", "13. 결론 — 성과, 한계, 향후 과제", "", 15);
   const cols = [
-    ["구현 성과", C.greenT, C.green, ["승인된 계획이 작업지시로 내려가는 폐루프를 실행으로 확인", "추가근무 후보의 계산·승인·실행을 하나의 근무달력으로 통일", "810회 반복 실험: EDD가 출하검사 진입 지연을 평균 190~2,433분에서 0~15분으로", "간트차트·실험 결과 화면, 명령 한 줄 재현"]],
-    ["한계", C.amberT, C.amber, ["Pico 2 WH 단말 미연동 (가상 단말·화면 입력으로 검증)", "시뮬레이터 작업시간 분포·교란 확률은 가정값", "비관적 예측으로 불필요한 추가근무 선택 가능", "데모 납기 여유가 커 최종 납기 지각 비교는 불가"]],
+    ["구현 성과", C.greenT, C.green, ["승인된 계획이 작업지시로 내려가는 폐루프를 실행으로 확인", "추가근무 후보의 계산·승인·실행을 하나의 근무달력으로 통일", "810회 반복 실험: EDD가 출하검사 진입 지연을 평균 190~2,433분에서 0~14.6분으로 크게 줄임 (작업정지 조건 5/30회는 지연 남음)", "간트차트·실험 결과 화면, 명령 한 줄 재현"]],
+    ["한계", C.amberT, C.amber, ["Pico 2 WH 단말 미연동 (가상 단말·화면 입력으로 검증)", "작업시간 분포·교란 확률은 가정값, 작업정지는 HOLD 이벤트가 아닌 작업시간 연장 모델", "비관적 예측으로 불필요한 추가근무 선택 가능", "데모 납기 여유가 커 최종 납기 지각 비교는 불가"]],
     ["향후 과제", C.tint, C.blue, ["Pico 단말을 같은 API에 연결", "실적으로 Forecast 보정", "추가근무 비용을 순위에 반영", "실제 현장 데이터로 시뮬레이터 보정"]],
   ];
   const cw = (W - 2 * M - 0.5) / 3;
