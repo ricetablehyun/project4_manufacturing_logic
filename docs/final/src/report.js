@@ -116,11 +116,11 @@ const children = [
     "2. 시스템이 모르는 실제 작업시간으로 움직이는 가상 현장 시뮬레이터를 만들고, HTTP API만으로 시스템과 통신하게 했다. Pico 2 WH 단말은 연동하지 못했다.",
     "3. 4가지 우선순위 규칙(FCFS·EDD·Slack·CR) 후보에 평일 17~19시 추가근무 후보를 더했고, 승인하면 근무달력에 저장되어 Forecast와 현장이 같은 시간을 쓴다.",
     "4. 3개 교란 조건 × 9개 재계획 구성 × 30 seed = 810회 폐루프 실행을 공통 난수로 비교했다. 실패 0, 공장 규칙 위반 0.",
-    `5. 계획 유지 시 출하검사 진입 지연 평균 ${f0(g("NORMAL", "KEEP"))}~${f0(g("STOPPAGE_REWORK", "KEEP"))}분이 EDD 재계획으로 0~${f1(g("STOPPAGE_REWORK", "EDD"))}분으로 크게 줄었다. 단, 작업정지·재작업 조건에서는 30회 중 5회 지연이 남았다.`,
-    `6. 추가근무는 지연이 남는 규칙에서 효과가 있었으나, 정상 조건 EDD에서는 지연이 이미 0인데도 평균 ${f0(g("NORMAL", "EDD+OT", "overtime_minutes"))}분을 열었다. 예측이 비관적이면 불필요한 추가근무를 고를 수 있다는 한계로 본다.`,
+    `5. 계획 유지 시 출하검사 진입 지연 평균 ${f0(g("NORMAL", "KEEP"))}~${f0(g("STOPPAGE_REWORK", "KEEP"))}분이 EDD 재계획으로 0~${f1(g("STOPPAGE_REWORK", "EDD"))}분이 되었다. 단, 작업정지·재작업 조건에서는 30회 중 5회 지연이 남았다.`,
+    `6. 추가근무는 지연이 남는 규칙에서 효과가 있었으나, 정상 조건 EDD에서는 지연이 이미 0인데도 평균 ${f0(g("NORMAL", "EDD+OT", "overtime_minutes"))}분을 열었다. 예측이 비관적일 때 불필요한 추가근무를 고르는 한계다.`,
   ].map((t) => P(t, { size: 18, after: 20, line: 260 })),
   P([run("Abstract", { size: 18, bold: true })], { before: 120, after: 40 }),
-  P("This project extends a shop-floor progress monitoring and replanning system into a closed loop. Unit-level work events update a finite-capacity forecast; when a LOT is forecast to miss its shipping-inspection gate, the system ranks FCFS, EDD, Slack and CR replanning candidates, now also with a weekday 17:00–19:00 overtime option, and the plan approved by a manager is issued back to the floor through a work-order API. A virtual plant with hidden true durations and noisy operator estimates exercises the loop over HTTP. In 810 closed-loop runs (3 disturbance conditions × 9 configurations × 30 common-random-number seeds), EDD replanning reduced the mean gate-entry delay from 190–2,433 minutes to 0–15 minutes, with no rule violations or failed runs. Overtime helped rules that still left delay but was also bought where it was unnecessary, apparently because decision-time forecasts were pessimistic. Hardware terminal (Pico 2 WH) integration was not completed.", { size: 18, line: 260, after: 60 }),
+  P("This project extends a shop-floor progress monitoring and replanning system into a closed loop. Unit-level work events update a finite-capacity forecast; when a LOT is forecast to miss its shipping-inspection gate, the system ranks FCFS, EDD, Slack and CR replanning candidates, now also with a weekday 17:00–19:00 overtime option, and the plan approved by a manager is issued back to the floor through a work-order API. A virtual plant with hidden true durations and noisy operator estimates exercises the loop over HTTP. In 810 closed-loop runs (3 disturbance conditions × 9 configurations × 30 common-random-number seeds), EDD replanning reduced the mean gate-entry delay from 190–2,433 minutes to 0–15 minutes, with no rule violations or failed runs. Overtime helped rules that still left delay but was also bought where it was unnecessary because decision-time forecasts were pessimistic. Hardware terminal (Pico 2 WH) integration was not completed.", { size: 18, line: 260, after: 60 }),
   P([run("Keywords: ", { size: 18, bold: true }), run("생산진도 관리, 유한용량 Forecast, 동적 재계획, 우선순위 규칙, 추가근무, 폐루프 시뮬레이션, 공통 난수", { size: 18 })], { after: 200 }),
 
   H1("1. 서론"),
@@ -145,12 +145,12 @@ const children = [
   P("승인된 계획 버전을 현장 작업 순서로 내려주는 작업지시 API(/work-orders)를 추가했다. 현장은 이 API가 준 순서대로만 다음 작업을 고르고, 실적(시작·완료·합격·불합격)을 다시 FastAPI로 보낸다. 같은 event_id의 재전송은 한 번만 반영된다."),
 
   H1("3. 폐루프 검증 환경"),
-  P("가상 현장 시뮬레이터는 시스템이 모르는 실제 작업시간(표준시간에 로그정규 잡음)을 갖고, 작업자는 오차가 있는 잔여시간을 입력한다. 관리자 정책은 실행 시작, 매일 아침, 지연 입력, 시험 불합격 시점에 Forecast를 확인하고, 긴급이면 정해진 규칙의 후보를 승인한다(KEEP은 승인하지 않음). 추가근무가 켜진 구성에서는 같은 규칙의 추가근무안이 D029 순위로 더 나을 때만 그것을 고른다. 이 가상 관리자는 관리자 화면과 같은 승인 API를 호출하므로, 실험과 실제 운영의 차이는 누가 후보를 고르는가뿐이다(실제 화면에서는 사람이 후보를 비교해 직접 승인한다). 시뮬레이터와 시스템은 HTTP API로만 통신한다."),
+  P("가상 현장 시뮬레이터는 시스템이 모르는 실제 작업시간(표준시간에 로그정규 잡음)을 갖고, 작업자는 오차가 있는 잔여시간을 입력한다. 관리자 정책은 실행 시작, 매일 아침, 지연 입력, 시험 불합격 시점에 Forecast를 확인하고, 긴급이면 정해진 규칙의 후보를 승인한다(KEEP은 승인하지 않음). 시뮬레이터와 시스템은 HTTP API로만 통신한다."),
   ...table([3600, 5426], ["확인한 것", "근거 (자동 테스트)"], [
     ["승인 전후로 현장 완료 순서가 바뀐다", "test_closed_loop.py::test_approval_changes_the_executed_order"],
     ["실제 시간 = 표준시간이면 현장 결과가 승인 시점 Forecast와 일치", "test_closed_loop.py::test_deterministic_plant_realises_the_plan_forecast"],
     ["잡음·재작업·이벤트 재전송에서도 끝까지 동작", "test_closed_loop.py::test_noisy_plant_with_rework_and_resent_events_completes"],
-    ["localhost의 실제 TCP 소켓(uvicorn + httpx)에서도 같은 루프 (Pico Wi-Fi 통신은 검증하지 않음)", "test_closed_loop_over_network.py"],
+    ["실제 TCP 소켓(uvicorn + httpx)에서도 같은 루프", "test_closed_loop_over_network.py"],
     ["추가근무 승인이 달력·Forecast·현장에 같이 반영", "test_overtime_replan.py (3개)"],
   ], "표 2. 폐루프 동작 검증"),
 
@@ -161,7 +161,7 @@ const children = [
   H2("5.1 실험 설계"),
   P("시작 상태는 중간발표 데모 상태(10/22 13:00)이며, 기준계획을 접수순(LOT-001 → 002 → 003)으로 두었다. 이 때문에 Gate가 10/28 09:00인 LOT-003이 Gate가 11/06 09:00인 LOT-002 뒤에 놓인다. 이는 재계획 효과를 보기 위해 의도적으로 만든 충돌 상황이며, 결과를 일반적인 공장 성능으로 해석해서는 안 된다."),
   ...table([2300, 6726], ["항목", "내용"], [
-    ["교란 조건 (3)", "정상: 표준시간 × 로그정규 잡음(σ=0.15, ±15% 범위를 뜻하지 않음), 작업자 추정 오차 σ=0.2 / 작업시간 +20%: 모든 작업 평균 1.2배 / 작업정지·재작업: 작업 시도의 3%에 +240분(HOLD/RESUME 이벤트가 아닌 작업시간 연장 모델), 최종 성능시험 8% 불합격 → 튜닝 재작업"],
+    ["교란 조건 (3)", "정상: 작업시간 잡음 σ=0.15, 추정 오차 σ=0.2 / 작업시간 +20%: 모든 작업 평균 1.2배 / 작업정지·재작업: 작업 시도의 3%에 +240분, 최종 성능시험 8% 불합격 → 튜닝 재작업"],
     ["재계획 구성 (9)", "KEEP(계획 유지), FCFS·EDD·Slack·CR 각각 추가근무 끔/켬"],
     ["반복", "구성마다 seed 1~30, 총 810회. 같은 seed는 모든 구성이 같은 실제 작업시간·불합격을 받음(공통 난수)"],
     ["지표", "출하검사 진입 지연 = max(0, 생산 완료 − Gate 예정 시작)의 LOT 합; 추가 가동시간; 최종 납기 지각; 공장 규칙 위반"],
@@ -175,12 +175,12 @@ const children = [
   P([bold("재계획 효과. "), `계획을 유지하면 평균 지연이 ${f1(g("NORMAL", "KEEP"))}, ${f1(g("SLOW", "KEEP"))}, ${f1(g("STOPPAGE_REWORK", "KEEP"))}분이다. EDD로 재계획하면 정상과 작업시간 +20% 조건에서 30회 모두 지연 0이고, 작업정지·재작업 조건에서도 평균 ${f1(g("STOPPAGE_REWORK", "EDD"))}분으로 줄었다. 다만 이 조건에서는 30회 중 5회 지연이 남았다. Slack은 작업정지·재작업 조건에서 평균 ${f1(g("STOPPAGE_REWORK", "SLACK"))}분이고 30회 중 ${lateRuns["STOPPAGE_REWORK|SLACK"]}회 지연이 남았다(최대 약 1,600분인 실행 포함). CR은 실행당 평균 3.2~4.3회 승인하며 정상 조건에서도 ${f1(g("NORMAL", "CR"))}분의 지연이 남았다.`]),
   P([bold("대조군. "), `FCFS는 기준계획과 같은 접수순이므로 계획 유지와 거의 같다(정상 조건 짝지은 차이 ${f1(+S["NORMAL|FCFS"].gate_delay_minutes_vs_keep_mean)} ± ${f1(+S["NORMAL|FCFS"].gate_delay_minutes_vs_keep_ci95)}분). 이는 실험 장치가 순서를 바꾸지 않으면 결과도 바뀌지 않음을 보여 주는 확인용 결과다.`]),
   ...img("gantt_replan.png", 6.3, "그림 3. 실험 시작 시점(10/22 13:00)의 두 일정: 계획 유지 Forecast(연한 막대)와 EDD 재계획안(진한 막대). 세로선은 Gate 예정 시각."),
-  P("그림 3에서 EDD는 Gate가 10/28인 LOT-003의 튜닝·시험을 앞당기고, Gate가 11/06으로 여유가 많은 LOT-002를 뒤로 보낸다. 작업시간과 자원은 같고 병목 장비를 쓰는 순서만 바뀌었다. 이 결과는 의도적으로 만든 순서 충돌 상황에서 EDD가 효과적이었다는 것이며, EDD가 일반적인 제조 현장에서 가장 우수하다는 뜻은 아니다."),
+  P("그림 3에서 EDD는 Gate가 10/28인 LOT-003의 튜닝·시험을 앞당기고, Gate가 11/06으로 여유가 많은 LOT-002를 뒤로 보낸다. 작업시간과 자원은 같고 병목 장비를 쓰는 순서만 바뀌었다."),
   H2("5.3 결과: 추가근무의 효과와 비용"),
   ...img("overtime_tradeoff.png", 6.3, "그림 4. 같은 규칙에서 추가근무를 켰을 때(○ → △) 지연과 추가 가동시간의 변화"),
   P(`추가근무는 지연이 남는 규칙에서 효과가 있었다. 작업정지·재작업 조건의 CR은 ${f1(g("STOPPAGE_REWORK", "CR"))} → ${f1(g("STOPPAGE_REWORK", "CR+OT"))}분, 정상 조건의 FCFS는 ${f1(g("NORMAL", "FCFS"))} → ${f1(g("NORMAL", "FCFS+OT"))}분이 되었다. 반대로 정상 조건의 EDD와 Slack은 추가근무 없이도 지연이 0인데, 추가근무를 켜면 평균 ${f1(g("NORMAL", "EDD+OT", "overtime_minutes"))}분을 열었고 30회 중 27회 실제로 사용했다. 결정 시점의 Forecast가 실제보다 비관적이어서 필요 없는 추가근무를 고른 것으로 보이며, 현재 순위 규칙은 지연을 먼저 줄이므로 예측이 비관적이면 이런 선택을 피할 수 없다. 이를 시스템의 한계로 보고한다.`),
   H2("5.4 두 지표의 구분"),
-  P("출하검사 진입 지연은 LOT별로 생산 완료가 출하검사 시작(Gate 예정)보다 늦은 시간(0 이상)을 더한 값이며, 중간발표의 4시간 57분도 이 지표다. 최종 납기 지각은 출하검사가 시작일 포함 3근무일(셋째 날 17시)에 끝난다고 가정했을 때, 출하 시각이 고객 납기보다 늦은 시간(LOT별 0 이상의 합)이다. 출하검사 규칙은 대시보드와 실험이 같은 코드(core/shipping_inspection.py)를 쓴다. 이 가정하에서 810회 모두 최종 납기 지각은 0이었고, 가장 빠듯한 경우도 납기 당일 17시 출하였다(KEEP 2회, FCFS 1회). 이 데모는 고객 납기에 여유가 있어 실제로 지켜야 하는 선은 출하검사 시작이었다. 출하검사 자체의 대기·불합격은 모델링하지 않았다."),
+  P("출하검사 진입 지연은 생산 완료가 출하검사 시작(Gate 예정)보다 늦은 시간이며, 중간발표의 4시간 57분도 이 지표다. 최종 납기 지각은 출하검사(시작일 포함 3근무일, 셋째 날 17시 종료)를 마친 출하 시각이 고객 납기보다 늦은 시간이다. 출하검사 규칙은 대시보드와 실험이 같은 코드(core/shipping_inspection.py)를 쓴다. 810회 모두 최종 납기 지각은 0이었고, 가장 빠듯한 경우도 납기 당일 17시 출하였다(KEEP 2회, FCFS 1회). 이 데모는 고객 납기에 여유가 있어 실제로 지켜야 하는 선은 출하검사 시작이었다. 출하검사 자체의 대기·불합격은 모델링하지 않았다."),
 
   H1("6. 검증과 트러블슈팅"),
   P("자동 테스트 384개가 Python 3.11과 3.13에서 통과한다(GitHub Actions). 810회 실행에서 공장 규칙 위반(같은 작업 중복 시작, 자원 용량 초과, 선행 공정 완료 전 시작, 근무시간 밖 시작) 0건, 실패 0회다. 반복 실험은 버그를 찾는 데도 쓰였으며, 찾은 문제는 회귀 테스트와 함께 고쳤다."),
